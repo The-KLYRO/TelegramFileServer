@@ -25,6 +25,9 @@ DATABASE_URL = str(os.getenv("DATABASE_URL", None))
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "***REMOVED***")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "***REMOVED***")
 
+# Web Server Port Configuration
+PORT = int(os.getenv("PORT", "8000"))
+
 AUTHORIZED_ADMIN_EMAILS = [
     "premiumqtrst@gmail.com",
     "pamodmadubashna2003@gmail.com",
