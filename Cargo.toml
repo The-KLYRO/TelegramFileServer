@@ -1,6 +1,16 @@
 [workspace]
 resolver = "2"
-members = ["crates/telegram"]
+members = [
+    "crates/telegram",
+    "crates/config",
+    "crates/db",
+    "crates/api",
+    "crates/auth",
+    "crates/app-core",
+    "crates/jobs",
+    "crates/server",
+    "apps/fileServerApp",
+]
 
 [workspace.dependencies]
 tokio = { version = "1.40", features = ["full"] }
@@ -20,3 +30,18 @@ tokio-util = { version = "0.7", features = ["codec"] }
 base64 = "0.21"
 chrono = { version = "0.4", features = ["serde"] }
 fastrand = "2.0"
+
+# New dependencies for v2 setup wizard
+axum = "0.7"
+tower-http = { version = "0.5", features = ["fs"] }
+mongodb = "3.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+aead = "0.5"
+rand = { version = "0.8", features = ["std"] }
+anyhow = "1.0"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+validator = { version = "0.17", features = ["derive"] }
+dirs = "5"
