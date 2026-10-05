@@ -1,0 +1,23 @@
+[package]
+name = "tfs-api"
+version = "0.1.0"
+edition = "2024"
+description = "API layer for TelegramFileServer v2 setup wizard"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+mongodb = { workspace = true }
+tfs-config = { path = "../config" }
+tfs-db = { path = "../db" }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+validator = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = "3.8"

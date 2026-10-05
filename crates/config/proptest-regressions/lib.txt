@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a6c9c1381a3341ff97011c5d9588db2f3b0f9335bce76984c3afe36cb68853d4 # shrinks to api_hash = "0a000a000000aa0000a00000a000aa00", bot_token_1 = "000000:A00_0-_aA0aAaa-_a-AAaa-aA0_AaaA0_aA", bot_token_2 = None, bot_token_3 = None, password = "*aa0^0#A"

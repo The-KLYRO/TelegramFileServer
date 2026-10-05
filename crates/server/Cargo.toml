@@ -1,0 +1,26 @@
+[package]
+name = "tfs-server"
+version = "0.1.0"
+edition = "2024"
+description = "TelegramFileServer v2 setup wizard server"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "tfs-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = { workspace = true }
+tower-http = { workspace = true }
+tfs-api = { path = "../api" }
+tfs-config = { path = "../config" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
