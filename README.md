@@ -1,41 +1,15 @@
 <!--
-═══════════════════════════════════════════════════════════════════════════════
-  SOCIAL PREVIEW CARD — assets/social-card.svg
-═══════════════════════════════════════════════════════════════════════════════
-  GitHub does NOT render raw inline SVG in a README, and a bare `.svg` upload is
-  not accepted by Settings → Social preview (it wants a raster image). So the SVG
-  in this repo is the *source*; export it to PNG once.
-
-  STEP 1 — Export to a 1200×630 PNG (pick one):
-
-    Option A — Inkscape (cross-platform, recommended)
-      inkscape assets/social-card.svg \
-              --export-type=png \
-              --export-filename=social-card.png \
-              --export-width=1200 --export-height=630
-
-    Option B — Any browser
-      Open assets/social-card.svg in Chrome/Firefox/Edge, then
-      right-click → "Save image as…" → social-card.png (1200×630).
-
-    Option C — resvg / svgtopng
-      svgtopng assets/social-card.svg 1200 630 > social-card.png
-      # or:  npx @resvg/resvg-js-cli assets/social-card.svg social-card.png
-
-  STEP 2 — Upload it
-      GitHub repo → Settings → General → Social preview → "Upload an image"
-      (or drag social-card.png onto the repository's "About" sidebar).
-
-  STEP 3 — Reuse the same 1200×630 PNG for
-      Twitter/X cards, Reddit posts, LinkedIn, Mastodon, and Slack unfurls.
-      Do not re-upload a differently-cropped version; keep one master file.
-
-  Re-run this export whenever assets/social-card.svg changes.
-═══════════════════════════════════════════════════════════════════════════════
+══════════════════════════════════════════════════════════════════════════════
+  SOCIAL PREVIEW CARD — assets/social-card.png
+══════════════════════════════════════════════════════════════════════════════
+  GitHub's Settings → Social preview accepts raster images only, so this PNG
+  is the master card. Reuse the same file for Twitter/X, Reddit, LinkedIn,
+  Mastodon, and Slack unfurls — do not upload differently-cropped versions.
+══════════════════════════════════════════════════════════════════════════════
 -->
 
 <p align="center">
-  <img src="assets/social-card.svg" width="820" alt="TelegramFileServer — Your files, in Telegram. Served as your own cloud drive.">
+  <img src="assets/social-card.png" width="820" alt="TelegramFileServer — Your files, in Telegram. Served as your own cloud drive.">
 </p>
 
 <p align="center">
@@ -94,7 +68,7 @@ TelegramFileServer/
 │   └── .env.example           # Configuration template
 ├── tests/                     # Cross-crate integration tests (v2) — placeholder
 ├── assets/
-│   └── social-card.svg        # 1200×630 social preview source
+│   └── social-card.png        # Social preview card (README hero)
 ├── ROADMAP.md                 # v2 plan
 └── LICENSE                    # MIT
 ```
