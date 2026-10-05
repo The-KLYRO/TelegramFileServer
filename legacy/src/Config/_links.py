@@ -2,16 +2,19 @@
 import os
 
 CHANNEL_LINK = 'https://t.me/pc_games_4_u'
-START_IMGS = ['assets/IMGS/START/1.jpg']
 LOGO = 'https://i.ibb.co/LhZtvnVz/6217502998695889825-99.jpg'
-SEARCH_IMGS = [
-    os.path.join("assets/IMGS/SEARCH", f)
-    for f in os.listdir("assets/IMGS/SEARCH")
-    if f.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp"))
-]
 
-START_IMGS = [
-    os.path.join("assets/IMGS/START", f)
-    for f in os.listdir("assets/IMGS/START")
-    if f.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp"))
-]
+
+def _list_imgs(directory):
+    """Return image paths in directory; empty list if the dir doesn't exist."""
+    if not os.path.isdir(directory):
+        return []
+    return [
+        os.path.join(directory, f)
+        for f in os.listdir(directory)
+        if f.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp"))
+    ]
+
+
+SEARCH_IMGS = _list_imgs("assets/IMGS/SEARCH")
+START_IMGS = _list_imgs("assets/IMGS/START")
