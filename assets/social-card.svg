@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="TelegramFileServer — Your files, in Telegram. Served as your own cloud drive.">
+  <title>TelegramFileServer — Your files, in Telegram. Served as your own cloud drive.</title>
+  <desc>Social preview card for the TelegramFileServer repository. Shows a paper-plane and file motif with the release strip: v1 stable, v2 in progress.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f1419"/>
+      <stop offset="55%" stop-color="#17212b"/>
+      <stop offset="100%" stop-color="#1f2c3a"/>
+    </linearGradient>
+    <linearGradient id="plane" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#c8d4de"/>
+    </linearGradient>
+    <linearGradient id="fileFill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#dde6ee"/>
+    </linearGradient>
+  </defs>
+
+  <!-- background -->
+  <rect width="1200" height="630" fill="url(#bg)"/>
+
+  <!-- subtle grid -->
+  <g stroke="#ffffff" stroke-opacity="0.05" stroke-width="1">
+    <path d="M0 90H1200M0 180H1200M0 270H1200M0 360H1200M0 450H1200M0 540H1200"/>
+    <path d="M100 0V630M220 0V630M340 0V630M460 0V630M580 0V630M700 0V630M820 0V630M940 0V630M1060 0V630"/>
+  </g>
+
+  <!-- motif: paper plane carrying a file -->
+  <g transform="translate(852,168)">
+    <!-- file sheet -->
+    <path d="M20 40 H150 L196 86 V236 a14 14 0 0 1 -14 14 H20 a14 14 0 0 1 -14 -14 V54 a14 14 0 0 1 14 -14 Z"
+          fill="url(#fileFill)" fill-opacity="0.14"
+          stroke="#ffffff" stroke-opacity="0.75" stroke-width="4" stroke-linejoin="round"/>
+    <!-- folded corner -->
+    <path d="M150 40 L196 86 H164 a14 14 0 0 1 -14 -14 Z" fill="#ffffff" fill-opacity="0.28"/>
+    <!-- file lines -->
+    <g stroke="#ffffff" stroke-opacity="0.55" stroke-width="5" stroke-linecap="round">
+      <path d="M44 126 H118"/>
+      <path d="M44 160 H150"/>
+      <path d="M44 194 H96"/>
+    </g>
+    <!-- paper plane -->
+    <g transform="translate(-46,196) rotate(-14)">
+      <path d="M0 62 L232 0 L96 148 L66 96 Z" fill="url(#plane)"/>
+      <path d="M66 96 L232 0 L120 122 Z" fill="#8fa3b3"/>
+      <path d="M66 96 L120 122 L92 186 Z" fill="#ffffff" fill-opacity="0.9"/>
+    </g>
+  </g>
+
+  <!-- eyebrow -->
+  <text x="80" y="120" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="26"
+        letter-spacing="6" fill="#8fb3c9" font-weight="600">SELF-HOSTED FILE SERVER</text>
+
+  <!-- title -->
+  <text x="76" y="248" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="96"
+        font-weight="700" fill="#ffffff" letter-spacing="-2">TelegramFileServer</text>
+
+  <!-- tagline -->
+  <text x="80" y="326" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="40"
+        fill="#dbe6ef">Your files, in Telegram.</text>
+  <text x="80" y="380" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="40"
+        fill="#dbe6ef">Served as your own cloud drive.</text>
+
+  <!-- divider -->
+  <path d="M80 430 H660" stroke="#ffffff" stroke-opacity="0.18" stroke-width="3"/>
+
+  <!-- release strip -->
+  <g>
+    <rect x="80" y="466" width="268" height="58" rx="12" fill="#ffffff" fill-opacity="0.10"
+          stroke="#7ee0a3" stroke-opacity="0.65" stroke-width="2"/>
+    <text x="214" y="505" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+          font-size="28" font-weight="600" fill="#a9ecc2">v1 stable</text>
+
+    <rect x="366" y="466" width="300" height="58" rx="12" fill="#ffffff" fill-opacity="0.10"
+          stroke="#f2c94c" stroke-opacity="0.65" stroke-width="2"/>
+    <text x="516" y="505" text-anchor="middle" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+          font-size="28" font-weight="600" fill="#f6d77a">v2 in progress</text>
+  </g>
+
+  <!-- footer hint -->
+  <text x="80" y="586" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="24"
+        fill="#8fa3b3">Free-ish storage &#183; Browser UI &#183; Multi-user</text>
+</svg>
