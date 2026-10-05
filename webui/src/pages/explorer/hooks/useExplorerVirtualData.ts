@@ -1,0 +1,1318 @@
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type MutableRefObject,
+  type SetStateAction,
+} from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { toast } from "@/hooks/use-toast";
+import {
+  mapFolderSettingsDto,
+  normalizeFolderId,
+  type FolderSettingsDto,
+} from "@/lib/folder-settings";
+import { resolveThumbnailSrc } from "@/lib/thumbnail-src";
+import { type FileItem } from "@/components/skybox/FileRow";
+import {
+  cacheExplorerDirectory,
+  getCachedExplorerDirectory,
+  getExplorerSessionState,
+  replaceExplorerDirectoryCache,
+} from "@/pages/explorer/explorerSessionStore";
+import { useExplorerVirtualThumbnails } from "@/pages/explorer/hooks/explorerVirtualThumbnails";
+import {
+  GALLERY_VIRTUAL_PATH,
+  SAVED_ITEMS_PAGE_SIZE,
+  type FileEntry,
+  type FsError,
+  type SavedPathCacheEntry,
+  type SyncSnapshotDto,
+  type TelegramChatDriveItemsPage,
+  type TelegramError,
+  type TelegramIndexSavedMessagesResult,
+  type TelegramMessage,
+  type TelegramSavedItem,
+  type TelegramSavedItemsPage,
+  type TgUpdateEventPayload,
+  convertFileEntryToFileItem,
+  driveItemToFileItem,
+  estimateSyncPercentFromIndexedCount,
+  getSavedMediaKind,
+  isGalleryPath,
+  isDriveVirtualFolderPath,
+  isSavedVirtualFilePath,
+  isSavedVirtualFolderPath,
+  mergeFileItemsByIdentity,
+  parseDriveChatIdFromPath,
+  savedToVirtualPath,
+  savedItemToFileItem,
+  telegramMessageToFileItem,
+  virtualToSavedPath,
+} from "@/pages/explorer/shared";
+
+type UseExplorerVirtualDataArgs = {
+  applyFetchedThumbnailRef: MutableRefObject<
+    (messageId: number, thumbnailSrc: string) => void
+  >;
+  attemptedChatDriveAutoIndexRef: MutableRefObject<Set<number>>;
+  currentPath: string;
+  currentPathRef: MutableRefObject<string>;
+  filesRef: MutableRefObject<FileItem[]>;
+  isOffline: boolean;
+  isOfflineRef: MutableRefObject<boolean>;
+  refreshRecentPaths: () => Promise<void>;
+  setCurrentPath: Dispatch<SetStateAction<string>>;
+  setError: Dispatch<SetStateAction<string | null>>;
+  setFiles: Dispatch<SetStateAction<FileItem[]>>;
+  setIsLoading: Dispatch<SetStateAction<boolean>>;
+  setSelectedFile: Dispatch<SetStateAction<FileItem | null>>;
+};
+
+export function useExplorerVirtualData({
+  applyFetchedThumbnailRef,
+  attemptedChatDriveAutoIndexRef,
+  currentPath,
+  currentPathRef,
+  filesRef,
+  isOffline,
+  isOfflineRef,
+  refreshRecentPaths,
+  setCurrentPath,
+  setError,
+  setFiles,
+  setIsLoading,
+  setSelectedFile,
+}: UseExplorerVirtualDataArgs) {
+  const sessionState = getExplorerSessionState();
+  const [savedItemsOffset, setSavedItemsOffset] = useState(0);
+  const [hasMoreSavedItems, setHasMoreSavedItems] = useState(false);
+  const [isLoadingMoreSavedItems, setIsLoadingMoreSavedItems] = useState(false);
+  const [isSavedBackfillSyncing, setIsSavedBackfillSyncing] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [isSavedSyncComplete, setIsSavedSyncComplete] = useState(false);
+  const [savedSyncProgress, setSavedSyncProgress] = useState(0);
+  const [showSavedUpToDateIndicator, setShowSavedUpToDateIndicator] =
+    useState(false);
+  const [showStartupSavedSync, setShowStartupSavedSync] = useState(false);
+
+  const savedItemsOffsetRef = useRef(0);
+  const hasMoreSavedItemsRef = useRef(false);
+  const isLoadingMoreSavedItemsRef = useRef(false);
+  const savedLoadMoreLastAttemptRef = useRef(0);
+  const startupSyncRanRef = useRef(false);
+  const savedPathCacheRef = useRef<Record<string, SavedPathCacheEntry>>(
+    sessionState.directoryCache,
+  );
+  const loadAllSavedItemsRef = useRef<(path: string) => Promise<void>>(
+    async () => {
+      return;
+    },
+  );
+  const loadSavedItemsPageRef = useRef<
+    (path: string, offset: number, append: boolean) => Promise<void>
+  >(async () => {
+    return;
+  });
+  const loadChatDriveItemsPageRef = useRef<
+    (path: string, offset: number, append: boolean) => Promise<void>
+  >(async () => {
+    return;
+  });
+  const loadDirectoryRef = useRef<
+    (path: string, options?: { force?: boolean }) => Promise<void>
+  >(async () => {
+    return;
+  });
+  const savedUpToDateHideTimerRef = useRef<number | null>(null);
+  const hasShownSavedUpToDateIndicatorRef = useRef(false);
+  const lastSavedSyncProgressAtRef = useRef(0);
+  const lastSavedSyncIndexedCountRef = useRef(0);
+  const lastSavedIndexedCountRef = useRef<number>(0);
+  const lastTelegramSyncReloadAtRef = useRef<number>(0);
+  const lastChatDriveAutoRefreshAtRef = useRef<number>(0);
+  const hasReachedSavedUpToDateRef = useRef<boolean>(false);
+  const { prefetchThumbnailsForItems } = useExplorerVirtualThumbnails({
+    applyFetchedThumbnailRef,
+    currentPathRef,
+    filesRef,
+  });
+
+  const applySavedItemToActiveView = useCallback(
+    (savedItem: TelegramSavedItem) => {
+      const activePath = currentPathRef.current;
+      if (!isSavedVirtualFolderPath(activePath)) {
+        return;
+      }
+
+      const fileItem = savedItemToFileItem(savedItem);
+      if (fileItem.isDirectory) {
+        return;
+      }
+
+      const targetFolderPath = savedToVirtualPath(savedItem.file_path);
+      const mediaKind = getSavedMediaKind(fileItem);
+      const shouldApplyToGallery =
+        activePath === GALLERY_VIRTUAL_PATH &&
+        (mediaKind === "image" || mediaKind === "video");
+      if (activePath !== targetFolderPath && !shouldApplyToGallery) {
+        return;
+      }
+
+      const messageId = savedItem.message_id;
+      const cacheEntry = savedPathCacheRef.current[activePath];
+      const alreadyPresent =
+        filesRef.current.some(
+          (item) => item.messageId === messageId || item.path === fileItem.path,
+        ) ||
+        !!cacheEntry?.items.some(
+          (item) => item.messageId === messageId || item.path === fileItem.path,
+        );
+
+      if (!alreadyPresent) {
+        setFiles((prev) => mergeFileItemsByIdentity(prev, [fileItem]));
+      }
+
+      if (cacheEntry) {
+        const merged = mergeFileItemsByIdentity(cacheEntry.items, [fileItem]);
+        savedPathCacheRef.current[activePath] = {
+          ...cacheEntry,
+          items: merged,
+          nextOffset: Math.max(cacheEntry.nextOffset, merged.length),
+        };
+      }
+
+      if (!alreadyPresent && activePath === currentPathRef.current) {
+        setSavedItemsOffset((prev) => Math.max(0, prev + 1));
+      }
+
+      void invoke<string | null>("tg_get_message_thumbnail", {
+        messageId,
+      })
+        .then((thumbnailPath) => {
+          const resolved = resolveThumbnailSrc(thumbnailPath);
+          if (resolved) {
+            applyFetchedThumbnailRef.current(messageId, resolved);
+          }
+        })
+        .catch(() => {
+          // ignore
+        });
+    },
+    [applyFetchedThumbnailRef, currentPathRef, filesRef, setFiles],
+  );
+
+  const hydrateFolderSettings = useCallback(async (items: FileItem[]) => {
+    const folderInputs = items
+      .filter((item) => item.isDirectory)
+      .map((item) => ({
+        folderId: item.path,
+        folderName: item.name,
+      }));
+
+    if (!folderInputs.length) {
+      return items;
+    }
+
+    try {
+      const rows = await invoke<FolderSettingsDto[]>(
+        "folder_settings_bootstrap_many",
+        {
+          inputs: folderInputs,
+        },
+      );
+      const settingsById = new Map(
+        rows.map((row) => {
+          const settings = mapFolderSettingsDto(row);
+          return [normalizeFolderId(settings.folderId), settings] as const;
+        }),
+      );
+
+      return items.map((item) => {
+        if (!item.isDirectory) {
+          return item;
+        }
+
+        return {
+          ...item,
+          folderSettings:
+            settingsById.get(normalizeFolderId(item.path)) ||
+            item.folderSettings ||
+            null,
+        };
+      });
+    } catch (error) {
+      console.error("Failed to hydrate folder settings:", error);
+      return items;
+    }
+  }, []);
+
+  useEffect(() => {
+    savedItemsOffsetRef.current = savedItemsOffset;
+  }, [savedItemsOffset]);
+
+  useEffect(() => {
+    hasMoreSavedItemsRef.current = hasMoreSavedItems;
+  }, [hasMoreSavedItems]);
+
+  useEffect(() => {
+    isLoadingMoreSavedItemsRef.current = isLoadingMoreSavedItems;
+  }, [isLoadingMoreSavedItems]);
+
+  const triggerSavedUpToDateIndicator = useCallback(() => {
+    if (hasShownSavedUpToDateIndicatorRef.current) {
+      return;
+    }
+    hasShownSavedUpToDateIndicatorRef.current = true;
+
+    setShowSavedUpToDateIndicator(true);
+    if (savedUpToDateHideTimerRef.current) {
+      window.clearTimeout(savedUpToDateHideTimerRef.current);
+    }
+    savedUpToDateHideTimerRef.current = window.setTimeout(() => {
+      setShowSavedUpToDateIndicator(false);
+      savedUpToDateHideTimerRef.current = null;
+    }, 3000);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (savedUpToDateHideTimerRef.current) {
+        window.clearTimeout(savedUpToDateHideTimerRef.current);
+      }
+    };
+  }, []);
+
+  const indexSavedMessages =
+    useCallback(async (): Promise<TelegramIndexSavedMessagesResult | null> => {
+      try {
+        const result: TelegramIndexSavedMessagesResult = await invoke(
+          "tg_index_saved_messages",
+        );
+
+        if (result.total_new_messages > 0) {
+          setIsSavedSyncComplete(false);
+          toast({
+            title: "Saved Messages Synced",
+            description: `Found ${result.total_new_messages} new item${result.total_new_messages === 1 ? "" : "s"}.`,
+          });
+        }
+
+        return result;
+      } catch (error) {
+        console.error("Error indexing saved messages:", error);
+        return null;
+      }
+    }, []);
+
+  const applySavedPathCache = useCallback(
+    (path: string): boolean => {
+      const cacheEntry = savedPathCacheRef.current[path];
+      const sharedCacheEntry = cacheEntry ?? getCachedExplorerDirectory(path);
+      if (!sharedCacheEntry) {
+        return false;
+      }
+
+      savedPathCacheRef.current[path] = sharedCacheEntry;
+      setFiles(sharedCacheEntry.items);
+      setSavedItemsOffset(sharedCacheEntry.nextOffset);
+      setHasMoreSavedItems(sharedCacheEntry.hasMore);
+      setCurrentPath(path);
+      prefetchThumbnailsForItems(sharedCacheEntry.items);
+      return true;
+    },
+    [setCurrentPath, setFiles],
+  );
+
+  const cacheSavedPath = useCallback(
+    (
+      path: string,
+      items: FileItem[],
+      nextOffset: number,
+      hasMore: boolean,
+      isCompleteSnapshot: boolean,
+    ) => {
+      const snapshot = {
+        items,
+        nextOffset,
+        hasMore,
+        isCompleteSnapshot,
+      };
+      savedPathCacheRef.current[path] = snapshot;
+      cacheExplorerDirectory(path, snapshot);
+    },
+    [],
+  );
+
+  const refreshVisibleFolderSettings = useCallback(
+    async (path: string) => {
+      if (currentPathRef.current !== path) {
+        return;
+      }
+
+      const currentItems = filesRef.current;
+      if (!currentItems.some((item) => item.isDirectory)) {
+        return;
+      }
+
+      const hydratedItems = await hydrateFolderSettings(currentItems);
+      if (currentPathRef.current !== path) {
+        return;
+      }
+
+      setFiles(hydratedItems);
+      setSelectedFile((previous) => {
+        if (!previous?.isDirectory) {
+          return previous;
+        }
+
+        return (
+          hydratedItems.find((item) => item.path === previous.path) || previous
+        );
+      });
+
+      if (path.startsWith("tg://saved")) {
+        cacheSavedPath(
+          path,
+          hydratedItems,
+          savedItemsOffsetRef.current,
+          hasMoreSavedItemsRef.current,
+          true,
+        );
+      }
+    },
+    [
+      cacheSavedPath,
+      currentPathRef,
+      filesRef,
+      hydrateFolderSettings,
+      setFiles,
+      setSelectedFile,
+    ],
+  );
+
+  const loadSavedItemsPage = useCallback(
+    async (path: string, offset: number, append: boolean) => {
+      const savedPath = virtualToSavedPath(path);
+      const result: TelegramSavedItemsPage = await invoke(
+        "tg_list_saved_items_page",
+        {
+          filePath: savedPath,
+          offset,
+          limit: SAVED_ITEMS_PAGE_SIZE,
+        },
+      );
+
+      const pageItems = result.items
+        .map(savedItemToFileItem)
+        .filter((item) => item.isDirectory || !!item.messageId);
+      const hydratedPageItems = await hydrateFolderSettings(pageItems);
+      const mergedItems = append
+        ? [...filesRef.current, ...hydratedPageItems]
+        : hydratedPageItems;
+      setFiles(mergedItems);
+      setSavedItemsOffset(result.next_offset);
+      setHasMoreSavedItems(result.has_more);
+      setCurrentPath(path);
+      cacheSavedPath(
+        path,
+        mergedItems,
+        result.next_offset,
+        result.has_more,
+        false,
+      );
+      prefetchThumbnailsForItems(mergedItems);
+    },
+    [
+      cacheSavedPath,
+      filesRef,
+      hydrateFolderSettings,
+      prefetchThumbnailsForItems,
+      setCurrentPath,
+      setFiles,
+    ],
+  );
+
+  const loadChatDriveItemsPage = useCallback(
+    async (path: string, offset: number, append: boolean) => {
+      const chatId = parseDriveChatIdFromPath(path);
+      if (!chatId) {
+        throw new Error("Invalid drive path");
+      }
+
+      const result: TelegramChatDriveItemsPage = await invoke(
+        "tg_list_chat_drive_items_page",
+        {
+          args: {
+            chatId,
+            offset,
+            limit: SAVED_ITEMS_PAGE_SIZE,
+          },
+        },
+      );
+
+      const pageItems = await hydrateFolderSettings(
+        (result.items || []).map(driveItemToFileItem),
+      );
+
+      if (offset === 0 && pageItems.length === 0) {
+        if (!attemptedChatDriveAutoIndexRef.current.has(chatId)) {
+          attemptedChatDriveAutoIndexRef.current.add(chatId);
+          void invoke("tg_index_chat_drive", {
+            args: {
+              chatId,
+              maxMessages: 25000,
+            },
+          }).catch(() => {
+            // ignore
+          });
+        }
+      }
+
+      const mergedItems = append
+        ? [...filesRef.current, ...pageItems]
+        : pageItems;
+      setFiles(mergedItems);
+      setSavedItemsOffset(result.next_offset);
+      setHasMoreSavedItems(result.has_more);
+      setCurrentPath(path);
+      cacheSavedPath(
+        path,
+        mergedItems,
+        result.next_offset,
+        result.has_more,
+        false,
+      );
+      prefetchThumbnailsForItems(mergedItems);
+    },
+    [
+      attemptedChatDriveAutoIndexRef,
+      filesRef,
+      hydrateFolderSettings,
+      prefetchThumbnailsForItems,
+      setCurrentPath,
+      setFiles,
+    ],
+  );
+
+  const loadAllSavedItems = useCallback(
+    async (path: string) => {
+      if (isGalleryPath(path)) {
+        const [imageItems, videoItems] = await Promise.all([
+          invoke<TelegramMessage[]>("tg_get_indexed_saved_messages", {
+            category: "images",
+          }),
+          invoke<TelegramMessage[]>("tg_get_indexed_saved_messages", {
+            category: "videos",
+          }),
+        ]);
+
+        const galleryItems = mergeFileItemsByIdentity(
+          imageItems.map(telegramMessageToFileItem),
+          videoItems.map(telegramMessageToFileItem),
+        )
+          .filter((item) => {
+            const mediaKind = getSavedMediaKind(item);
+            return mediaKind === "image" || mediaKind === "video";
+          })
+          .sort((a, b) => {
+            const aTime = new Date(a.modifiedAt || "").getTime();
+            const bTime = new Date(b.modifiedAt || "").getTime();
+            return bTime - aTime;
+          });
+
+        setFiles(galleryItems);
+        setSavedItemsOffset(galleryItems.length);
+        setHasMoreSavedItems(false);
+        setCurrentPath(path);
+        cacheSavedPath(path, galleryItems, galleryItems.length, false, true);
+        prefetchThumbnailsForItems(galleryItems);
+        return;
+      }
+
+      const savedPath = virtualToSavedPath(path);
+      const result: TelegramSavedItem[] = await invoke("tg_list_saved_items", {
+        filePath: savedPath,
+      });
+
+      const allItems = await hydrateFolderSettings(
+        result.map(savedItemToFileItem),
+      );
+      setFiles(allItems);
+      setSavedItemsOffset(allItems.length);
+      setHasMoreSavedItems(false);
+      setCurrentPath(path);
+      cacheSavedPath(path, allItems, allItems.length, false, true);
+      prefetchThumbnailsForItems(allItems);
+    },
+    [
+      cacheSavedPath,
+      hydrateFolderSettings,
+      prefetchThumbnailsForItems,
+      setCurrentPath,
+      setFiles,
+    ],
+  );
+
+  loadAllSavedItemsRef.current = loadAllSavedItems;
+  loadSavedItemsPageRef.current = loadSavedItemsPage;
+  loadChatDriveItemsPageRef.current = loadChatDriveItemsPage;
+
+  const loadMoreVirtualItems = useCallback(async () => {
+    if (
+      !currentPath.startsWith("tg://saved") &&
+      !isDriveVirtualFolderPath(currentPath)
+    ) {
+      return;
+    }
+
+    if (isGalleryPath(currentPath)) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - savedLoadMoreLastAttemptRef.current < 250) {
+      return;
+    }
+    savedLoadMoreLastAttemptRef.current = now;
+
+    if (isLoadingMoreSavedItemsRef.current) {
+      return;
+    }
+
+    if (currentPath.startsWith("tg://saved")) {
+      if (isSavedSyncComplete) {
+        return;
+      }
+      if (!hasMoreSavedItemsRef.current && !isSavedBackfillSyncing) {
+        return;
+      }
+
+      setIsLoadingMoreSavedItems(true);
+      try {
+        await loadSavedItemsPage(
+          currentPath,
+          savedItemsOffsetRef.current,
+          true,
+        );
+      } catch (error) {
+        console.error("Error loading more saved items:", error);
+        setHasMoreSavedItems(false);
+      } finally {
+        setIsLoadingMoreSavedItems(false);
+      }
+      return;
+    }
+
+    if (!hasMoreSavedItemsRef.current) {
+      return;
+    }
+
+    setIsLoadingMoreSavedItems(true);
+    try {
+      await loadChatDriveItemsPage(
+        currentPath,
+        savedItemsOffsetRef.current,
+        true,
+      );
+    } catch (error) {
+      console.error("Error loading more drive items:", error);
+      setHasMoreSavedItems(false);
+    } finally {
+      setIsLoadingMoreSavedItems(false);
+    }
+  }, [
+    currentPath,
+    isSavedBackfillSyncing,
+    isSavedSyncComplete,
+    loadChatDriveItemsPage,
+    loadSavedItemsPage,
+  ]);
+
+  const handleDirectoryScroll = useCallback(
+    (event: React.UIEvent<HTMLDivElement>) => {
+      if (
+        !currentPath.startsWith("tg://saved") &&
+        !isDriveVirtualFolderPath(currentPath)
+      ) {
+        return;
+      }
+
+      const target = event.currentTarget;
+      const reachedBottom =
+        target.scrollTop + target.clientHeight >= target.scrollHeight - 120;
+      if (reachedBottom) {
+        void loadMoreVirtualItems();
+      }
+    },
+    [currentPath, loadMoreVirtualItems],
+  );
+
+  const loadDirectory = useCallback(
+    async (path: string, options?: { force?: boolean }) => {
+      const forceReload = options?.force === true;
+      setError(null);
+
+      if (path && path !== currentPathRef.current) {
+        currentPathRef.current = path;
+        setCurrentPath(path);
+      }
+
+      if (path.startsWith("tg://saved") && !forceReload) {
+        const hasCache = applySavedPathCache(path);
+        if (hasCache) {
+          const cacheEntry = savedPathCacheRef.current[path];
+          if (isSavedSyncComplete && !cacheEntry.isCompleteSnapshot) {
+            void loadAllSavedItems(path).catch((error) => {
+              console.error(
+                "Error upgrading cached saved items view to full list:",
+                error,
+              );
+            });
+          }
+          return;
+        }
+      }
+
+      setIsLoading(true);
+      try {
+        if (path.startsWith("tg://saved")) {
+          setSavedItemsOffset(0);
+          setHasMoreSavedItems(false);
+          if (isGalleryPath(path) || isSavedSyncComplete) {
+            await loadAllSavedItems(path);
+          } else {
+            await loadSavedItemsPage(path, 0, false);
+          }
+        } else if (isDriveVirtualFolderPath(path)) {
+          setSavedItemsOffset(0);
+          setHasMoreSavedItems(true);
+          await loadChatDriveItemsPage(path, 0, false);
+        } else {
+          const result: FileEntry[] = await invoke("fs_list_dir", { path });
+          const convertedFiles = await hydrateFolderSettings(
+            result.map(convertFileEntryToFileItem),
+          );
+          setFiles(convertedFiles);
+          setCurrentPath(path);
+          setSavedItemsOffset(0);
+          setHasMoreSavedItems(false);
+          cacheSavedPath(path, convertedFiles, 0, false, true);
+        }
+
+        if (!path.startsWith("tg://")) {
+          try {
+            await invoke("db_add_recent_path", { path });
+            void refreshRecentPaths();
+          } catch (error) {
+            console.error("Error adding recent path:", error);
+          }
+        }
+      } catch (error) {
+        const typedError = error as FsError;
+        setError(typedError.message || "An unknown error occurred");
+        toast({
+          title: "Error loading directory",
+          description: typedError.message || "An unknown error occurred",
+          variant: "destructive",
+        });
+        console.error("Error loading directory:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [
+      applySavedPathCache,
+      currentPathRef,
+      isSavedSyncComplete,
+      loadAllSavedItems,
+      loadChatDriveItemsPage,
+      loadSavedItemsPage,
+      hydrateFolderSettings,
+      refreshRecentPaths,
+      setCurrentPath,
+      setError,
+      setFiles,
+      setIsLoading,
+    ],
+  );
+
+  loadDirectoryRef.current = loadDirectory;
+
+  useEffect(() => {
+    if (startupSyncRanRef.current || isOffline) {
+      return;
+    }
+
+    startupSyncRanRef.current = true;
+
+    let cancelled = false;
+
+    const runSavedMessageSync = async () => {
+      setShowStartupSavedSync(true);
+      setIsConnecting(true);
+      setIsSavedBackfillSyncing(true);
+      setSavedSyncProgress(0);
+      lastSavedSyncProgressAtRef.current = Date.now();
+      lastSavedSyncIndexedCountRef.current = 0;
+      try {
+        const syncResult = await indexSavedMessages();
+        const complete = Boolean(syncResult?.historical_sync_complete);
+        if (!cancelled) {
+          setIsSavedSyncComplete(complete);
+          setIsSavedBackfillSyncing(!complete);
+
+          if (complete) {
+            setSavedSyncProgress(100);
+            setShowStartupSavedSync(false);
+            triggerSavedUpToDateIndicator();
+            setHasMoreSavedItems(false);
+            if (currentPathRef.current.startsWith("tg://saved")) {
+              await loadAllSavedItems(currentPathRef.current);
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Error syncing saved messages:", error);
+        setSavedSyncProgress(0);
+      } finally {
+        if (!cancelled) {
+          setIsConnecting(false);
+        }
+      }
+    };
+
+    void runSavedMessageSync();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    indexSavedMessages,
+    isOffline,
+    loadAllSavedItems,
+    currentPathRef,
+    triggerSavedUpToDateIndicator,
+  ]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+
+    const handleSnapshot = async (snapshot: SyncSnapshotDto) => {
+      setShowStartupSavedSync((prev) => (prev ? false : prev));
+
+      const state = snapshot.state;
+      const hasProgressFields =
+        typeof snapshot.indexed_count === "number" ||
+        typeof snapshot.progress_percent === "number";
+      const isNonIdleState = state !== "Idle";
+      if (!hasProgressFields && !isNonIdleState) {
+        return;
+      }
+
+      const progress = snapshot.progress_percent;
+      const hasExplicitPercent =
+        typeof progress === "number" && Number.isFinite(progress);
+      if (hasExplicitPercent) {
+        setSavedSyncProgress(progress);
+        lastSavedSyncProgressAtRef.current = Date.now();
+      } else if (state === "UpToDate") {
+        setSavedSyncProgress(100);
+        lastSavedSyncProgressAtRef.current = Date.now();
+      }
+
+      const wasUpToDate = hasReachedSavedUpToDateRef.current;
+      if (state === "Syncing") {
+        setIsSavedBackfillSyncing(true);
+        if (!wasUpToDate) {
+          setIsSavedSyncComplete(false);
+        }
+      } else if (state === "UpToDate") {
+        hasReachedSavedUpToDateRef.current = true;
+        setIsSavedBackfillSyncing(false);
+        setIsSavedSyncComplete(true);
+        setSavedSyncProgress(100);
+        triggerSavedUpToDateIndicator();
+      } else if (state === "Idle") {
+        if (hasReachedSavedUpToDateRef.current) {
+          setIsSavedBackfillSyncing(false);
+        }
+      } else if (typeof state === "object" && state && "Error" in state) {
+        const message = state.Error?.message || "Saved Messages sync failed";
+        setIsSavedBackfillSyncing(false);
+        if (!wasUpToDate) {
+          setIsSavedSyncComplete(false);
+        }
+
+        const lowered = message.toLowerCase();
+        if (!lowered.includes("(code 404)") && !lowered.includes("not found")) {
+          toast({
+            title: "Sync error",
+            description: message,
+            variant: "destructive",
+          });
+        }
+      }
+
+      const indexedCount =
+        typeof snapshot.indexed_count === "number" &&
+        snapshot.indexed_count >= 0
+          ? snapshot.indexed_count
+          : 0;
+      const previousIndexed = lastSavedIndexedCountRef.current;
+      lastSavedIndexedCountRef.current = indexedCount;
+
+      if (!hasExplicitPercent && state === "Syncing") {
+        const lastSeen = lastSavedSyncIndexedCountRef.current;
+        if (indexedCount > lastSeen) {
+          lastSavedSyncIndexedCountRef.current = indexedCount;
+          const estimated = estimateSyncPercentFromIndexedCount(indexedCount);
+          if (estimated > 0) {
+            setSavedSyncProgress((prev) => Math.max(prev, estimated));
+            lastSavedSyncProgressAtRef.current = Date.now();
+          }
+        }
+      }
+
+      const activePath = currentPathRef.current;
+      if (!activePath.startsWith("tg://saved")) {
+        return;
+      }
+
+      if (state === "UpToDate") {
+        if (!wasUpToDate) {
+          void loadAllSavedItemsRef.current(activePath);
+        }
+        return;
+      }
+
+      if (indexedCount > previousIndexed && filesRef.current.length === 0) {
+        void loadSavedItemsPageRef.current(activePath, 0, false);
+      }
+    };
+
+    listen<SyncSnapshotDto>("account_sync_changed", (event) => {
+      void handleSnapshot(event.payload);
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((error) => {
+        console.error("Failed to listen for sync snapshots:", error);
+      });
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [currentPathRef, filesRef, triggerSavedUpToDateIndicator]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+
+    type TelegramUpdatePayload = {
+      message_id?: number | null;
+      folder_kind?: string | null;
+    };
+
+    const folderKindToVirtualFolderPath = (
+      folderKind?: string | null,
+    ): string => {
+      const normalized = (folderKind || "").toLowerCase().trim();
+      const folderName =
+        normalized === "images"
+          ? "Images"
+          : normalized === "videos"
+            ? "Videos"
+            : normalized === "audio"
+              ? "Audio"
+              : "Documents";
+      return `tg://saved/${folderName}`;
+    };
+
+    listen("tg-update-received", (event) => {
+      if (isOfflineRef.current) {
+        return;
+      }
+      const now = Date.now();
+      if (now - lastTelegramSyncReloadAtRef.current < 200) {
+        return;
+      }
+      lastTelegramSyncReloadAtRef.current = now;
+
+      const payload = event.payload as TelegramUpdatePayload | null;
+      const messageId =
+        payload &&
+        typeof payload.message_id === "number" &&
+        payload.message_id > 0
+          ? payload.message_id
+          : null;
+
+      if (!messageId) {
+        return;
+      }
+
+      const activePath = currentPathRef.current;
+      if (!isSavedVirtualFolderPath(activePath)) {
+        return;
+      }
+
+      const targetFolderPath = folderKindToVirtualFolderPath(
+        payload?.folder_kind,
+      );
+      const shouldApplyToGallery =
+        activePath === GALLERY_VIRTUAL_PATH &&
+        (targetFolderPath === "tg://saved/Images" ||
+          targetFolderPath === "tg://saved/Videos");
+      if (activePath !== targetFolderPath && !shouldApplyToGallery) {
+        return;
+      }
+
+      void invoke<TelegramSavedItem | null>("tg_get_saved_item_by_message_id", {
+        messageId,
+      })
+        .then((savedItem) => {
+          if (!savedItem) {
+            return;
+          }
+
+          applySavedItemToActiveView(savedItem);
+        })
+        .catch((error) => {
+          console.error("Failed to apply Telegram update:", error);
+        });
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((error) => {
+        console.error("Failed to listen for Telegram updates:", error);
+      });
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [applySavedItemToActiveView, currentPathRef, isOfflineRef]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+
+    type UploadIndexedPayload = {
+      messageId?: number | null;
+      filePath?: string | null;
+    };
+
+    listen<UploadIndexedPayload>("tg-upload-indexed", (event) => {
+      if (isOfflineRef.current) {
+        return;
+      }
+
+      const payload = event.payload;
+      const messageId =
+        payload &&
+        typeof payload.messageId === "number" &&
+        payload.messageId > 0
+          ? payload.messageId
+          : null;
+      if (!messageId) {
+        return;
+      }
+
+      const activePath = currentPathRef.current;
+      if (!isSavedVirtualFolderPath(activePath)) {
+        return;
+      }
+
+      const indexedFolderPath =
+        typeof payload.filePath === "string" && payload.filePath.trim()
+          ? savedToVirtualPath(payload.filePath)
+          : null;
+      if (
+        indexedFolderPath &&
+        activePath !== indexedFolderPath &&
+        activePath !== GALLERY_VIRTUAL_PATH
+      ) {
+        return;
+      }
+
+      void invoke<TelegramSavedItem | null>("tg_get_saved_item_by_message_id", {
+        messageId,
+      })
+        .then((savedItem) => {
+          if (!savedItem) {
+            return;
+          }
+
+          applySavedItemToActiveView(savedItem);
+        })
+        .catch((error) => {
+          console.error("Failed to apply indexed upload:", error);
+        });
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((error) => {
+        console.error("Failed to listen for indexed uploads:", error);
+      });
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [applySavedItemToActiveView, currentPathRef, isOfflineRef]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+
+    listen<TgUpdateEventPayload>("tg-update-received", (event) => {
+      if (isOfflineRef.current) {
+        return;
+      }
+      const payload = event.payload;
+      if (!payload) {
+        return;
+      }
+
+      const reason = payload.reason;
+      if (
+        reason !== "message_deleted" &&
+        reason !== "messages_deleted" &&
+        reason !== "message_filtered_out"
+      ) {
+        return;
+      }
+
+      const ids = Array.isArray(payload.message_ids)
+        ? payload.message_ids
+        : typeof payload.message_id === "number"
+          ? [payload.message_id]
+          : [];
+      const normalizedIds = ids
+        .map((value) => Math.floor(value))
+        .filter((value) => Number.isFinite(value) && value > 0);
+      if (
+        !normalizedIds.length ||
+        !currentPathRef.current.startsWith("tg://saved")
+      ) {
+        return;
+      }
+
+      const idSet = new Set(normalizedIds);
+      setFiles((prev) =>
+        prev.filter((item) => !(item.messageId && idSet.has(item.messageId))),
+      );
+      setSelectedFile((prev) =>
+        prev && prev.messageId && idSet.has(prev.messageId) ? null : prev,
+      );
+      savedPathCacheRef.current = {};
+      replaceExplorerDirectoryCache({});
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((error) => {
+        console.error("Failed to listen for Telegram updates:", error);
+      });
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [currentPathRef, isOfflineRef, setFiles, setSelectedFile]);
+
+  useEffect(() => {
+    let unlisten: null | (() => void) = null;
+    void (async () => {
+      unlisten = await listen<{
+        chat_id?: number;
+        indexed_items?: number;
+        done?: boolean;
+      }>("tg-chat-drive-index-progress", (event) => {
+        const payload = event.payload;
+        const chatId = payload?.chat_id;
+        if (
+          typeof chatId !== "number" ||
+          !Number.isFinite(chatId) ||
+          chatId === 0
+        ) {
+          return;
+        }
+
+        const activePath = currentPathRef.current;
+        if (!isDriveVirtualFolderPath(activePath)) {
+          return;
+        }
+
+        const activeChatId = parseDriveChatIdFromPath(activePath);
+        if (!activeChatId || activeChatId !== chatId) {
+          return;
+        }
+
+        const now = Date.now();
+        if (now - lastChatDriveAutoRefreshAtRef.current < 750) {
+          return;
+        }
+        lastChatDriveAutoRefreshAtRef.current = now;
+
+        const indexed =
+          typeof payload.indexed_items === "number" &&
+          payload.indexed_items >= 0
+            ? payload.indexed_items
+            : null;
+
+        if (payload.done === true) {
+          void loadChatDriveItemsPageRef
+            .current(activePath, 0, false)
+            .catch(() => {
+              // ignore
+            });
+          return;
+        }
+
+        const visibleCount = filesRef.current.length;
+        if (visibleCount === 0) {
+          void loadChatDriveItemsPageRef
+            .current(activePath, 0, false)
+            .catch(() => {
+              // ignore
+            });
+          return;
+        }
+
+        if (
+          indexed !== null &&
+          indexed > visibleCount &&
+          !isLoadingMoreSavedItemsRef.current
+        ) {
+          void loadChatDriveItemsPageRef
+            .current(activePath, savedItemsOffsetRef.current, true)
+            .catch(() => {
+              // ignore
+            });
+        }
+      });
+    })();
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [currentPathRef, filesRef]);
+
+  useEffect(() => {
+    let unlisten: null | (() => void) = null;
+
+    void (async () => {
+      unlisten = await listen<{
+        parent_id?: string | null;
+        reason?: string | null;
+      }>("explorer_entries_invalidated", (event) => {
+        const parentId = event.payload?.parent_id?.trim();
+        if (
+          event.payload?.reason !== "folder_settings_scan_complete" ||
+          !parentId ||
+          parentId !== currentPathRef.current
+        ) {
+          return;
+        }
+
+        void refreshVisibleFolderSettings(parentId);
+      });
+    })();
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [currentPathRef, refreshVisibleFolderSettings]);
+
+  const isSavedSyncUiActive =
+    currentPath.startsWith("tg://saved") &&
+    (showStartupSavedSync || isConnecting || isSavedBackfillSyncing);
+  const shouldShowSavedSyncToolbarIndicator =
+    currentPath.startsWith("tg://saved") &&
+    (isSavedSyncUiActive ||
+      (isSavedSyncComplete && showSavedUpToDateIndicator));
+
+  useEffect(() => {
+    if (!isSavedSyncUiActive || isSavedSyncComplete) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      const now = Date.now();
+      if (now - lastSavedSyncProgressAtRef.current < 1500) {
+        return;
+      }
+
+      setSavedSyncProgress((prev) => {
+        if (prev >= 90) {
+          return prev;
+        }
+
+        const bump = prev < 10 ? 2 : 1;
+        const next = Math.min(90, prev + bump);
+        if (next !== prev) {
+          lastSavedSyncProgressAtRef.current = now;
+        }
+        return next;
+      });
+    }, 900);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [isSavedSyncComplete, isSavedSyncUiActive]);
+
+  const savedSyncPercent = isSavedSyncUiActive
+    ? Math.min(99, Math.max(0, Math.round(savedSyncProgress)))
+    : isSavedSyncComplete
+      ? 100
+      : Math.min(100, Math.max(0, Math.round(savedSyncProgress)));
+  const syncProgressLabel = `${savedSyncPercent}%`;
+  const savedSyncStatusLabel = isConnecting
+    ? "Connecting..."
+    : showStartupSavedSync || isSavedBackfillSyncing
+      ? "Syncing..."
+      : isSavedSyncComplete
+        ? "Up to date"
+        : "Not syncing";
+
+  return {
+    handleDirectoryScroll,
+    hasMoreSavedItems,
+    hasMoreSavedItemsRef,
+    isConnecting,
+    isLoadingMoreSavedItems,
+    isLoadingMoreSavedItemsRef,
+    isSavedBackfillSyncing,
+    isSavedSyncComplete,
+    loadAllSavedItemsRef,
+    loadChatDriveItemsPageRef,
+    loadDirectory,
+    loadDirectoryRef,
+    loadMoreVirtualItems,
+    loadSavedItemsPageRef,
+    savedItemsOffset,
+    savedItemsOffsetRef,
+    savedPathCacheRef,
+    savedSyncPercent,
+    savedSyncStatusLabel,
+    setHasMoreSavedItems,
+    setIsLoadingMoreSavedItems,
+    setSavedItemsOffset,
+    shouldShowSavedSyncToolbarIndicator,
+    showStartupSavedSync,
+    syncProgressLabel,
+  };
+}
