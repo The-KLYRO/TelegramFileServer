@@ -17,3 +17,5 @@ tg_files/
 *.log
 /target/
 crates/telegram/poc-sessions/
+.opencode
+*.ps1
