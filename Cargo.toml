@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = ["crates/telegram"]
+
+[workspace.dependencies]
+tokio = { version = "1.40", features = ["full"] }
+grammers-client = { version = "0.10", features = [] }
+grammers-session = "0.10"
+grammers-mtproto = "0.10"
+grammers-tl-types = "0.10"
+thiserror = "1.0"
+bytes = "1.5"
+sha2 = "0.10"
+tempfile = "3.8"
+futures = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-trait = "0.1"
+tokio-util = { version = "0.7", features = ["codec"] }
+base64 = "0.21"
+chrono = { version = "0.4", features = ["serde"] }
+fastrand = "2.0"

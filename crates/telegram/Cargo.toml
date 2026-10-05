@@ -1,0 +1,33 @@
+[package]
+name = "tfs-telegram"
+version = "0.1.0"
+edition = "2024"
+description = "Telegram transfer engine for TelegramFileServer - Grammers-based replacement for Pyrogram operations"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
+grammers-client = { workspace = true }
+grammers-session = { workspace = true }
+grammers-mtproto = { workspace = true }
+grammers-tl-types = { workspace = true }
+thiserror = { workspace = true }
+bytes = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+async-trait = { workspace = true }
+tokio-util = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+fastrand = { workspace = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+proptest = "1.0"
+
+[[bin]]
+name = "poc"
+path = "src/bin/poc.rs"
