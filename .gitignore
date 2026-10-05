@@ -13,3 +13,7 @@ test/
 .vscode/
 yt-downloader-tauri-main/
 tg_files/
+*.session
+*.log
+/target/
+crates/telegram/poc-sessions/
