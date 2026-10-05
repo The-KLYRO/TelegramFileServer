@@ -70,6 +70,21 @@ impl KdfParams {
         }
     }
 
+    /// Cheap params for files that live NEXT TO the plaintext wizard
+    /// password (appdata password.json / binary-dir files). The password
+    /// sits beside them by design, so brute-force resistance of these local
+    /// files comes from that layout — not from expensive hashing. Using the
+    /// strong 64 MB × 3 params here made every resume pay seconds of
+    /// Argon2 before responding; these params hash in ~10 ms.
+    pub fn local() -> Self {
+        Self {
+            memory: 8_192, // 8 MB
+            iterations: 1,
+            parallelism: 1,
+            ..Self::new()
+        }
+    }
+
     pub fn from_salt(salt: &[u8]) -> Self {
         Self {
             salt: BASE64.encode(salt),
@@ -129,6 +144,11 @@ impl EncryptedPayload {
 pub struct SensitiveData {
     pub api_hash: String,
     pub bot_tokens: Vec<String>,
+    /// Encrypted alongside api_hash — Telegram API credentials are useless
+    /// without both. Legacy docs (written before api_id was encrypted)
+    /// deserialize as 0 and get upgraded on the next wizard save.
+    #[serde(default)]
+    pub api_id: i64,
 }
 
 /// Complete setup configuration stored in MongoDB
@@ -139,8 +159,11 @@ pub struct SetupConfig {
     pub kdf: KdfParams,
     pub password_hash: String, // Argon2 hash (PHC string format)
     pub encrypted: EncryptedPayload,
-    pub api_id: i64,
+    // NOTE: api_id is NOT stored here — it lives inside `encrypted`
+    // (SensitiveData) so it is protected by the wizard password.
     pub owner_id: i64,
+    /// Fallback storage chat for uploads when none is configured elsewhere.
+    pub default_chat_id: i64,
     pub created_at: DateTime<Utc>,
 }
 
@@ -164,6 +187,10 @@ pub struct Step2Input {
     pub api_hash: String,
     pub bot_token_1: String,
     pub owner_id: i64,
+    /// Chat that receives files when no chat is configured per file/user.
+    /// Required —0 is invalid, negatives are valid (groups/channels).
+    #[serde(default)]
+    pub default_chat_id: i64,
     pub bot_token_2: Option<String>,
     pub bot_token_3: Option<String>,
 }
@@ -225,9 +252,10 @@ fn verify_password(password: &str, password_hash: &str) -> Result<bool> {
         .is_ok())
 }
 
-/// Encrypt sensitive data using XChaCha20-Poly1305
-pub fn encrypt_sensitive(
-    data: &SensitiveData,
+/// Encrypt an arbitrary JSON-serializable value using XChaCha20-Poly1305
+/// with a key derived from the wizard password (Argon2id).
+pub fn encrypt_value<T: Serialize>(
+    data: &T,
     password: &str,
     kdf: &KdfParams,
 ) -> Result<EncryptedPayload> {
@@ -246,12 +274,12 @@ pub fn encrypt_sensitive(
     Ok(EncryptedPayload::new(&nonce_bytes, &ciphertext))
 }
 
-/// Decrypt sensitive data using XChaCha20-Poly1305
-pub fn decrypt_sensitive(
+/// Decrypt a value encrypted by [`encrypt_value`] using the wizard password.
+pub fn decrypt_value<T: serde::de::DeserializeOwned>(
     encrypted: &EncryptedPayload,
     password: &str,
     kdf: &KdfParams,
-) -> Result<SensitiveData> {
+) -> Result<T> {
     let key = derive_key(password, kdf)?;
     let cipher = XChaCha20Poly1305::new(XChaChaKey::from_slice(&key));
 
@@ -267,6 +295,24 @@ pub fn decrypt_sensitive(
         .map_err(|e| ConfigError::Decryption(e.to_string()))?;
 
     serde_json::from_slice(&plaintext).map_err(ConfigError::Serialization)
+}
+
+/// Encrypt sensitive data using XChaCha20-Poly1305
+pub fn encrypt_sensitive(
+    data: &SensitiveData,
+    password: &str,
+    kdf: &KdfParams,
+) -> Result<EncryptedPayload> {
+    encrypt_value(data, password, kdf)
+}
+
+/// Decrypt sensitive data using XChaCha20-Poly1305
+pub fn decrypt_sensitive(
+    encrypted: &EncryptedPayload,
+    password: &str,
+    kdf: &KdfParams,
+) -> Result<SensitiveData> {
+    decrypt_value(encrypted, password, kdf)
 }
 
 /// Create a new SetupConfig from step inputs
@@ -300,6 +346,11 @@ pub fn create_setup_config(step1: &Step1Input, step2: &Step2Input) -> Result<Set
             "Owner ID must be a positive integer".to_string(),
         ));
     }
+    if step2.default_chat_id == 0 {
+        return Err(ConfigError::Validation(
+            "Default chat ID is required".to_string(),
+        ));
+    }
 
     let kdf = KdfParams::new();
     let password_hash = hash_password(&step1.password, &kdf)?;
@@ -314,6 +365,7 @@ pub fn create_setup_config(step1: &Step1Input, step2: &Step2Input) -> Result<Set
     .collect();
 
     let sensitive = SensitiveData {
+        api_id: step2.api_id,
         api_hash: step2.api_hash.clone(),
         bot_tokens,
     };
@@ -325,8 +377,8 @@ pub fn create_setup_config(step1: &Step1Input, step2: &Step2Input) -> Result<Set
         kdf,
         password_hash,
         encrypted,
-        api_id: step2.api_id,
         owner_id: step2.owner_id,
+        default_chat_id: step2.default_chat_id,
         created_at: Utc::now(),
     })
 }
@@ -361,6 +413,8 @@ mod tests {
             bot_token_2: Some("123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew12".to_string()),
             bot_token_3: None,
             owner_id: 987654321,
+            // Negative IDs are valid: storage targets are often groups/channels.
+            default_chat_id: -1001234567890,
         }
     }
 
@@ -372,6 +426,7 @@ mod tests {
 
         let decrypted = verify_and_decrypt(&config, &step1.password).unwrap();
 
+        assert_eq!(decrypted.api_id, step2.api_id);
         assert_eq!(decrypted.api_hash, step2.api_hash);
         assert_eq!(decrypted.bot_tokens.len(), 2);
         assert_eq!(decrypted.bot_tokens[0], step2.bot_token_1);
@@ -443,6 +498,32 @@ mod tests {
     }
 
     #[test]
+    fn test_zero_default_chat_id_rejected() {
+        let mut step2 = valid_step2();
+        step2.default_chat_id = 0;
+
+        let step1 = valid_step1();
+        let result = create_setup_config(&step1, &step2);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ConfigError::Validation(msg) => {
+                assert!(msg.contains("Default chat ID is required"));
+            }
+            _ => panic!("expected Validation error"),
+        }
+    }
+
+    #[test]
+    fn test_negative_default_chat_id_accepted() {
+        let mut step2 = valid_step2();
+        step2.default_chat_id = -1009876543210; // groups/channels are negative
+
+        let step1 = valid_step1();
+        let config = create_setup_config(&step1, &step2).unwrap();
+        assert_eq!(config.default_chat_id, -1009876543210);
+    }
+
+    #[test]
     fn test_optional_bot_tokens() {
         let mut step2 = valid_step2();
         step2.bot_token_2 = None;
@@ -467,6 +548,17 @@ mod tests {
     }
 
     #[test]
+    fn test_kdf_params_local_is_cheap() {
+        let kdf = KdfParams::local();
+        assert_eq!(kdf.memory, 8_192);
+        assert_eq!(kdf.iterations, 1);
+        assert_eq!(kdf.parallelism, 1);
+        // Fresh random salt per call (distinct derived keys).
+        assert_ne!(KdfParams::local().salt, kdf.salt);
+        assert!(!kdf.salt.is_empty());
+    }
+
+    #[test]
     fn test_kdf_params_new_generates_salt() {
         let kdf1 = KdfParams::new();
         let kdf2 = KdfParams::new();
@@ -477,6 +569,7 @@ mod tests {
     proptest! {
         #[test]
         fn test_encrypt_decrypt_roundtrip_prop(
+            api_id in 1i64..i64::MAX,
             api_hash in "[a-f0-9]{32}",
             bot_token_1 in "[0-9]{6}:[A-Za-z0-9_-]{35}",
             bot_token_2 in proptest::option::of("[0-9]{6}:[A-Za-z0-9_-]{35}"),
@@ -498,10 +591,11 @@ mod tests {
                 bot_token_3.unwrap_or_default(),
             ].into_iter().filter(|t| !t.is_empty()).collect();
 
-            let sensitive = SensitiveData { api_hash, bot_tokens };
+            let sensitive = SensitiveData { api_id, api_hash, bot_tokens };
             let encrypted = encrypt_sensitive(&sensitive, &password, &kdf).unwrap();
             let decrypted = decrypt_sensitive(&encrypted, &password, &kdf).unwrap();
 
+            prop_assert_eq!(decrypted.api_id, sensitive.api_id);
             prop_assert_eq!(decrypted.api_hash, sensitive.api_hash);
             prop_assert_eq!(decrypted.bot_tokens, sensitive.bot_tokens);
         }
