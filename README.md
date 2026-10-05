@@ -1,13 +1,3 @@
-<!--
-══════════════════════════════════════════════════════════════════════════════
-  SOCIAL PREVIEW CARD — assets/social-card.png
-══════════════════════════════════════════════════════════════════════════════
-  GitHub's Settings → Social preview accepts raster images only, so this PNG
-  is the master card. Reuse the same file for Twitter/X, Reddit, LinkedIn,
-  Mastodon, and Slack unfurls — do not upload differently-cropped versions.
-══════════════════════════════════════════════════════════════════════════════
--->
-
 <p align="center">
   <img src="assets/social-card.png" width="820" alt="TelegramFileServer — Your files, in Telegram. Served as your own cloud drive.">
 </p>
