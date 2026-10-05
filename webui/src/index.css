@@ -1,0 +1,776 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* SkyBox Design System - NUEXA Glass Dark Theme */
+
+@layer base {
+  :root {
+    --titlebar-height: 44px;
+
+    /* Dark Theme Colors - Almost Black with Glass */
+    --background: 0 0% 7%;
+    /* #121212 */
+    --foreground: 0 0% 90%;
+    /* #E6E6E6 */
+
+    --card: 0 0% 100% / 0.03;
+    /* Glass effect */
+    --card-foreground: 0 0% 90%;
+
+    --popover: 0 0% 12% / 0.65;
+    --popover-foreground: 0 0% 90%;
+
+    --primary: 142 70% 45%;
+    /* Green accent */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 0 0% 100% / 0.05;
+    /* Glass secondary */
+    --secondary-foreground: 0 0% 90%;
+
+    --muted: 0 0% 100% / 0.03;
+    --muted-foreground: 0 0% 50%;
+    /* #808080 */
+
+    --accent: 142 70% 50%;
+    /* Green hover */
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 70% 50%;
+    /* Red */
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 0 0% 100% / 0.08;
+    --input: 0 0% 100% / 0.05;
+    --ring: 142 70% 45%;
+
+    --radius: 12px;
+
+    /* Glass panel tokens */
+    --panel: 0 0% 100% / 0.03;
+    --panel-2: 0 0% 100% / 0.06;
+    --telegram-accent: 142 70% 45%;
+    --telegram-accent-hover: 142 70% 50%;
+    --telegram-border: 0 0% 100% / 0.08;
+    --telegram-divider: 0 0% 100% / 0.04;
+
+    /* Glass sidebar tokens */
+    --sidebar-background: 0 0% 100% / 0.02;
+    --sidebar-foreground: 0 0% 90%;
+    --sidebar-primary: 142 70% 45%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 100% / 0.08;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-border: 0 0% 100% / 0.06;
+    --sidebar-ring: 142 70% 45%;
+
+    /* Glass effects */
+    --glass-blur: 20px;
+    --glass-opacity: 0.03;
+    --floating-glass-background: rgb(14 16 22 / 0.65);
+    --floating-glass-filter: blur(24px) saturate(160%);
+
+    /* Explorer folder icon (CSS) */
+    --folder-back: 38 78% 32%;
+    --folder-back-hi: 40 92% 42%;
+    --folder-front: 40 95% 50%;
+    --folder-front-hi: 46 98% 62%;
+    --folder-tab: 48 98% 66%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  input,
+  textarea {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  .telegram-password-input::-ms-reveal,
+  .telegram-password-input::-ms-clear {
+    display: none;
+  }
+
+  button,
+  [role="button"],
+  a,
+  label {
+    cursor: default;
+  }
+
+  body {
+    @apply text-foreground antialiased;
+    font-family:
+      system-ui,
+      -apple-system,
+      BlinkMacSystemFont,
+      "Segoe UI",
+      Roboto,
+      "Helvetica Neue",
+      Arial,
+      sans-serif;
+    background: transparent !important;
+    min-height: 100vh;
+    overflow: hidden;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden;
+    background: transparent !important;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.3);
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.5);
+  }
+}
+
+@layer components {
+  .skybox-shell {
+    position: relative;
+    min-height: 100%;
+    background: rgb(10 12 18 / 0.33);
+    border: 1px solid rgb(255 255 255 / 0.05);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.025),
+      0 18px 50px rgb(0 0 0 / 0.24);
+    overflow: hidden;
+  }
+
+  .skybox-shell::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: url("/assets/noise.svg") repeat;
+    background-size: 128px 128px;
+    opacity: 0.012;
+    mix-blend-mode: soft-light;
+  }
+
+  .skybox-content {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Glass panel effect */
+  .telegram-panel {
+    @apply rounded-xl border border-border;
+    background: rgb(14 16 22 / 0.24);
+  }
+
+  /* Glass card */
+  .glass-card {
+    @apply rounded-xl border border-border;
+    background: rgb(14 16 22 / 0.24);
+  }
+
+  /* Glass sidebar */
+  .glass-sidebar {
+    background: rgb(14 16 22 / 0.24);
+    border-right: 1px solid hsl(0 0% 100% / 0.08);
+  }
+
+  .skybox-sidebar,
+  .skybox-topbar,
+  .skybox-panel,
+  .telegram-panel,
+  .glass-card,
+  .glass-sidebar,
+  .bg-glass {
+    background: rgb(14 16 22 / 0.24);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.02),
+      0 8px 24px rgb(0 0 0 / 0.16);
+  }
+
+  .bg-glass-dark {
+    background: rgb(12 14 20 / 0.34);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.02),
+      0 10px 26px rgb(0 0 0 / 0.18);
+  }
+
+  .floating-glass-surface {
+    background: var(--floating-glass-background);
+    -webkit-backdrop-filter: var(--floating-glass-filter);
+    backdrop-filter: var(--floating-glass-filter);
+    will-change: auto;
+  }
+
+  .context-menu-surface {
+    background: rgb(14 16 22 / 0.65) !important;
+    border: 1px solid rgb(255 255 255 / 0.08);
+    -webkit-backdrop-filter: blur(34px) !important;
+    backdrop-filter: blur(34px) !important;
+    will-change: auto;
+  }
+
+  .context-menu-backdrop {
+    background: rgb(14 16 22 / 0.08);
+    -webkit-backdrop-filter: blur(34px);
+    backdrop-filter: blur(34px);
+  }
+
+  .details-panel-shell {
+    border-right: 1px solid rgb(255 255 255 / 0.08);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.02),
+      0 18px 38px rgb(0 0 0 / 0.24);
+    transition:
+      transform 200ms ease-out,
+      opacity 180ms ease-out,
+      background-color 180ms ease-out,
+      -webkit-backdrop-filter 180ms ease-out,
+      backdrop-filter 180ms ease-out;
+    will-change: transform, opacity;
+  }
+
+  .details-panel-shell[data-state="open"] {
+    transform: translateX(0);
+    opacity: 1;
+    background: rgb(14 16 22 / 0.65);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    backdrop-filter: blur(24px) saturate(160%);
+  }
+
+  .details-panel-shell[data-state="closed"] {
+    transform: translateX(-14px);
+    opacity: 0;
+    background: rgb(14 16 22 / 0);
+    -webkit-backdrop-filter: blur(0) saturate(100%);
+    backdrop-filter: blur(0) saturate(100%);
+  }
+
+  .details-panel-backdrop {
+    pointer-events: none;
+    transition:
+      opacity 160ms ease-out,
+      background-color 160ms ease-out,
+      -webkit-backdrop-filter 160ms ease-out,
+      backdrop-filter 160ms ease-out;
+  }
+
+  .details-panel-backdrop[data-state="open"] {
+    opacity: 1;
+    background: rgb(14 16 22 / 0.08);
+    -webkit-backdrop-filter: blur(8px) saturate(120%);
+    backdrop-filter: blur(8px) saturate(120%);
+  }
+
+  .details-panel-backdrop[data-state="closed"] {
+    opacity: 0;
+    background: rgb(14 16 22 / 0);
+    -webkit-backdrop-filter: blur(0) saturate(100%);
+    backdrop-filter: blur(0) saturate(100%);
+  }
+
+  .share-widget-shell {
+    background: rgb(14 16 22 / 0.65);
+    border: 1px solid rgb(255 255 255 / 0.08);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.02),
+      0 18px 38px rgb(0 0 0 / 0.24);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    backdrop-filter: blur(24px) saturate(160%);
+    will-change: auto;
+  }
+
+  .share-widget-backdrop {
+    background: rgb(14 16 22 / 0.08);
+    -webkit-backdrop-filter: blur(8px) saturate(120%);
+    backdrop-filter: blur(8px) saturate(120%);
+    pointer-events: none;
+  }
+
+  .floating-dialog-shell,
+  .notification-widget-shell {
+    background: rgb(14 16 22 / 0.65);
+    border: 1px solid rgb(255 255 255 / 0.08);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.02),
+      0 18px 38px rgb(0 0 0 / 0.24);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    backdrop-filter: blur(24px) saturate(160%);
+    will-change: auto;
+  }
+
+  .floating-dialog-backdrop,
+  .notification-widget-backdrop {
+    background: rgb(14 16 22 / 0.08);
+    -webkit-backdrop-filter: blur(8px) saturate(120%);
+    backdrop-filter: blur(8px) saturate(120%);
+    pointer-events: none;
+  }
+
+  .toast-widget-shell {
+    background: rgb(14 16 22 / 0.65);
+    border: 1px solid rgb(255 255 255 / 0.08);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.02),
+      0 18px 38px rgb(0 0 0 / 0.24);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    backdrop-filter: blur(24px) saturate(160%);
+    will-change: auto;
+  }
+
+  .toast-widget-shell-destructive {
+    background: rgb(88 22 28 / 0.72);
+    border-color: rgb(248 113 113 / 0.22);
+  }
+
+  .toast-widget-backdrop {
+    background: rgb(14 16 22 / 0.08);
+    -webkit-backdrop-filter: blur(8px) saturate(120%);
+    backdrop-filter: blur(8px) saturate(120%);
+    pointer-events: none;
+  }
+
+  .transfer-widget-shell {
+    background: rgb(14 16 22 / 0.65);
+    border: 1px solid rgb(255 255 255 / 0.08);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.02),
+      0 18px 38px rgb(0 0 0 / 0.24);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    backdrop-filter: blur(24px) saturate(160%);
+    will-change: auto;
+  }
+
+  .transfer-widget-backdrop {
+    background: rgb(14 16 22 / 0.08);
+    -webkit-backdrop-filter: blur(8px) saturate(120%);
+    backdrop-filter: blur(8px) saturate(120%);
+    pointer-events: none;
+  }
+
+  .upload-confirm-shell {
+    background: rgb(14 16 22 / 0.65);
+    border: 1px solid rgb(255 255 255 / 0.08);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.02),
+      0 18px 38px rgb(0 0 0 / 0.24);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    backdrop-filter: blur(24px) saturate(160%);
+    will-change: auto;
+  }
+
+  .upload-confirm-backdrop {
+    background: rgb(14 16 22 / 0.08);
+    -webkit-backdrop-filter: blur(8px) saturate(120%);
+    backdrop-filter: blur(8px) saturate(120%);
+    pointer-events: none;
+  }
+
+  .upload-confirm-widget .plyr {
+    --plyr-color-main: hsl(var(--primary));
+    --plyr-video-control-color: hsl(var(--foreground));
+    --plyr-video-controls-background: linear-gradient(
+      transparent,
+      hsl(0 0% 6% / 0.82)
+    );
+    --plyr-audio-controls-background: hsl(0 0% 100% / 0.04);
+    --plyr-audio-control-color: hsl(var(--foreground));
+    --plyr-audio-control-background-hover: hsl(var(--primary) / 0.18);
+    --plyr-menu-background: hsl(0 0% 10% / 0.96);
+    --plyr-menu-color: hsl(var(--foreground));
+    --plyr-menu-border-color: hsl(var(--border));
+    --plyr-tooltip-background: hsl(0 0% 8% / 0.94);
+    --plyr-tooltip-color: hsl(var(--foreground));
+    --plyr-tooltip-shadow: 0 6px 18px hsl(0 0% 0% / 0.45);
+    --plyr-range-track-height: 4px;
+    --plyr-range-fill-background: hsl(var(--primary));
+    --plyr-range-thumb-active-shadow-width: 2px;
+  }
+
+  .upload-confirm-widget .plyr__control {
+    color: hsl(var(--foreground));
+  }
+
+  .upload-confirm-widget .plyr__control:hover,
+  .upload-confirm-widget .plyr__control[aria-expanded="true"] {
+    background: hsl(var(--primary) / 0.14);
+    color: hsl(var(--primary));
+  }
+
+  .upload-confirm-widget .plyr--video .plyr__control--overlaid {
+    background: hsl(var(--primary) / 0.92);
+    color: hsl(var(--primary-foreground));
+  }
+
+  .upload-confirm-widget .plyr--full-ui input[type="range"] {
+    color: hsl(var(--primary));
+  }
+
+  .upload-confirm-widget .plyr__progress__buffer {
+    background: hsl(0 0% 100% / 0.16);
+  }
+
+  .upload-confirm-widget .plyr__menu__container {
+    border: 1px solid hsl(var(--border));
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+  }
+
+  .upload-confirm-widget .upload-confirm-plyr,
+  .upload-confirm-widget .upload-confirm-plyr .plyr,
+  .upload-confirm-widget .upload-confirm-plyr .plyr__video-wrapper,
+  .upload-confirm-widget .upload-confirm-plyr video {
+    width: 100%;
+    height: 100%;
+  }
+
+  .upload-confirm-widget .upload-confirm-plyr .plyr__video-wrapper {
+    padding-bottom: 0 !important;
+  }
+
+  .upload-confirm-widget .upload-confirm-plyr video {
+    object-fit: contain;
+  }
+
+  .toaster [data-sonner-toast] {
+    position: relative;
+  }
+
+  .toaster [data-sonner-toast]::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: rgb(14 16 22 / 0.08);
+    -webkit-backdrop-filter: blur(8px) saturate(120%);
+    backdrop-filter: blur(8px) saturate(120%);
+    pointer-events: none;
+  }
+
+  [data-radix-popper-content-wrapper],
+  [role="dialog"],
+  [role="menu"],
+  [role="listbox"] {
+    -webkit-backdrop-filter: var(--floating-glass-filter);
+    backdrop-filter: var(--floating-glass-filter);
+  }
+
+  [data-radix-popper-content-wrapper] {
+    will-change: auto !important;
+  }
+
+  .skybox-topbar {
+    background: rgb(18 20 26 / 0.24);
+  }
+
+  /* Glass input */
+  .telegram-input {
+    @apply rounded-lg px-4 py-3 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all duration-200;
+    background: hsl(0 0% 100% / 0.05);
+    border: 1px solid hsl(0 0% 100% / 0.08);
+  }
+
+  /* Glass button */
+  .telegram-button {
+    @apply bg-primary hover:bg-accent text-primary-foreground font-medium rounded-lg px-6 py-3 transition-all duration-200 active:scale-[0.98];
+  }
+
+  /* Divider */
+  .telegram-divider {
+    @apply h-px bg-gradient-to-r from-transparent via-border to-transparent;
+  }
+
+  /* Glass hover item */
+  .telegram-hover-item {
+    @apply rounded-lg transition-all duration-150;
+  }
+
+  .telegram-hover-item:hover {
+    background: hsl(0 0% 100% / 0.06);
+  }
+
+  /* Glass active item */
+  .telegram-active-item {
+    background: hsl(0 0% 100% / 0.08);
+  }
+
+  /* Active sidebar item with green accent */
+  .sidebar-active {
+    background: hsl(0 0% 100% / 0.06);
+    border-left: 3px solid hsl(142 70% 45%);
+  }
+}
+
+@layer utilities {
+  /* Text styles */
+  .text-title {
+    @apply text-lg font-semibold text-foreground;
+  }
+
+  .text-body {
+    @apply text-sm text-foreground;
+  }
+
+  .text-small {
+    @apply text-xs;
+  }
+
+  .text-link {
+    @apply text-primary transition-colors duration-150 hover:text-accent;
+  }
+
+  /* Subtle glow effect */
+  .telegram-glow {
+    box-shadow: 0 0 0 3px hsl(var(--primary) / 0.15);
+  }
+
+  .bg-folder-back {
+    background: linear-gradient(
+      180deg,
+      hsl(var(--folder-back-hi) / 0.98) 0%,
+      hsl(var(--folder-back) / 0.98) 70%
+    );
+  }
+
+  .bg-folder-front {
+    background: linear-gradient(
+      180deg,
+      hsl(var(--folder-front-hi) / 0.98) 0%,
+      hsl(var(--folder-front) / 0.98) 72%
+    );
+  }
+
+  .bg-folder-tab {
+    background: linear-gradient(
+      180deg,
+      hsl(var(--folder-tab) / 0.98) 0%,
+      hsl(var(--folder-front-hi) / 0.92) 100%
+    );
+  }
+
+  /* Explorer folder icon (pure CSS, scalable) */
+  .skybox-folder-icon {
+    --folder-size: 48px;
+    position: relative;
+    width: var(--folder-size);
+    height: var(--folder-size);
+    flex: 0 0 auto;
+  }
+
+  .skybox-folder-icon::before {
+    content: "";
+    position: absolute;
+    inset: calc(var(--folder-size) * 6 / 48) calc(var(--folder-size) * 2.5 / 48)
+      calc(var(--folder-size) * 6.5 / 48) calc(var(--folder-size) * 2.5 / 48);
+    border-radius: calc(var(--folder-size) * 2.2 / 48);
+    background:
+      linear-gradient(to bottom, rgb(255 219 101 / 0.18), transparent 24%),
+      linear-gradient(to bottom, #dfa11b, #8a5b06);
+    box-shadow:
+      inset 0 1px 0 rgb(255 236 171 / 0.32),
+      inset 0 -2px 0 rgb(85 48 0 / 0.24),
+      0 10px 22px rgb(0 0 0 / 0.16);
+    clip-path: polygon(0 0, 36% 0, 42.5% 8.5%, 100% 8.5%, 100% 100%, 0 100%);
+  }
+
+  .skybox-folder-icon::after {
+    content: "";
+    position: absolute;
+    left: calc(var(--folder-size) * 2.5 / 48);
+    right: calc(var(--folder-size) * 2.5 / 48);
+    top: calc(var(--folder-size) * 10 / 48);
+    bottom: calc(var(--folder-size) * 6.5 / 48);
+    border-radius: calc(var(--folder-size) * 2.2 / 48);
+    background:
+      linear-gradient(
+        180deg,
+        rgb(255 248 209 / 0.25),
+        transparent 18%,
+        transparent 76%,
+        rgb(116 72 4 / 0.08)
+      ),
+      linear-gradient(to bottom, #ffd666, #f4bd2b);
+    box-shadow:
+      inset 0 1px 0 rgb(255 246 205 / 0.42),
+      inset 0 -1px 0 rgb(132 82 4 / 0.18),
+      0 8px 16px rgb(0 0 0 / 0.14);
+    clip-path: polygon(0 15%, 41.8% 15%, 48.2% 0, 100% 0, 100% 100%, 0 100%);
+  }
+
+  .skybox-file-icon-shell {
+    --file-icon-ink: hsl(var(--muted-foreground) / 0.92);
+  }
+
+  .skybox-file-icon-glyph {
+    color: var(--file-icon-ink);
+    filter: drop-shadow(0 10px 24px rgb(0 0 0 / 0.18));
+    opacity: 0.96;
+  }
+
+  .skybox-file-icon-shell[data-tone="image"] {
+    --file-icon-ink: rgb(72 154 126 / 0.96);
+  }
+
+  .skybox-file-icon-shell[data-tone="video"] {
+    --file-icon-ink: rgb(69 146 173 / 0.96);
+  }
+
+  .skybox-file-icon-shell[data-tone="audio"] {
+    --file-icon-ink: rgb(148 172 64 / 0.96);
+  }
+
+  .skybox-file-icon-shell[data-tone="code"] {
+    --file-icon-ink: rgb(176 171 62 / 0.96);
+  }
+
+  .skybox-file-icon-shell[data-tone="archive"] {
+    --file-icon-ink: rgb(197 145 66 / 0.96);
+  }
+
+  .skybox-file-icon-shell[data-tone="sheet"] {
+    --file-icon-ink: rgb(96 176 108 / 0.96);
+  }
+
+  .skybox-file-icon-shell[data-tone="text"] {
+    --file-icon-ink: rgb(120 133 154 / 0.96);
+  }
+
+  .skybox-file-icon-shell[data-tone="pdf"] {
+    --file-icon-ink: rgb(199 108 108 / 0.96);
+  }
+
+  .skybox-file-icon-shell[data-tone="binary"] {
+    --file-icon-ink: rgb(138 123 183 / 0.96);
+  }
+
+  .skybox-file-icon-shell[data-tone="config"] {
+    --file-icon-ink: rgb(94 168 188 / 0.96);
+  }
+
+  .skybox-file-icon-shell[data-tone="package"] {
+    --file-icon-ink: rgb(203 142 90 / 0.96);
+  }
+
+  .skybox-file-icon-shell[data-tone="secure"] {
+    --file-icon-ink: rgb(188 116 96 / 0.96);
+  }
+
+  .skybox-file-icon-shell[data-tone="default"] {
+    --file-icon-ink: rgb(116 129 150 / 0.94);
+  }
+
+  .app-background {
+    position: relative;
+    overflow: hidden;
+    background: linear-gradient(
+      180deg,
+      rgb(255 255 255 / 0.01) 0%,
+      rgb(255 255 255 / 0) 14%,
+      rgb(8 10 14 / 0.08) 100%
+    );
+  }
+
+  .app-background > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  .explorer-surface {
+    background: rgb(8 10 14 / 0.1);
+  }
+
+  .skeleton-shimmer {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .skeleton-shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      100deg,
+      transparent 0%,
+      hsl(var(--foreground) / 0.1) 45%,
+      transparent 100%
+    );
+    transform: translateX(-120%);
+    animation: skybox-shimmer 1.35s ease-in-out infinite;
+  }
+}
+
+@keyframes skybox-shimmer {
+  100% {
+    transform: translateX(120%);
+  }
+}
+
+@keyframes select-item-cascade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes select-item-cascade-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(-5px) scale(0.985);
+  }
+}
+
+.select-viewport-stagger {
+  --select-stagger-step: 18ms;
+  --select-close-stagger-step: 14ms;
+}
+
+.select-item-motion {
+  transform-origin: center top;
+  will-change: transform, opacity;
+}
+
+.select-content-motion[data-state="open"] .select-item-motion {
+  animation: select-item-cascade-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: calc(
+    var(--select-item-index, 0) * var(--select-stagger-step)
+  );
+}
+
+.select-content-motion[data-state="closed"] .select-item-motion {
+  animation: select-item-cascade-out 120ms cubic-bezier(0.4, 0, 1, 1) both;
+  animation-delay: calc(
+    (var(--select-item-count, 0) - var(--select-item-index, 0) - 1) *
+      var(--select-close-stagger-step)
+  );
+}
