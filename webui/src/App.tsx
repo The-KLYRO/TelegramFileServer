@@ -56,6 +56,9 @@ const StorageSettingsPage = lazy(
 const AppearanceSettingsPage = lazy(
   () => import("./pages/settings/AppearanceSettingsPage"),
 );
+const AdminUsersPage = lazy(
+  () => import("./pages/settings/AdminUsersPage"),
+);
 const AboutSettingsPage = lazy(
   () => import("./pages/settings/AboutSettingsPage"),
 );
@@ -268,28 +271,6 @@ const WorkspaceShell = () => {
 
 
 
-const AppChrome = () => {
-  const location = useLocation();
-  const shouldShowTitleBar = location.pathname !== "/";
-
-  return (
-    <>
-      <div className="skybox-shell h-full">
-        <div className="skybox-content app-background h-full flex flex-col overflow-hidden">
-          {shouldShowTitleBar ? <TitleBar /> : null}
-          <div className="skybox-content relative flex-1 overflow-hidden">
-            <AppRoutes />
-          </div>
-        </div>
-      </div>
-      <div
-        id="floating-root"
-        className="pointer-events-none fixed inset-0 z-[140]"
-      />
-    </>
-  );
-};
-
 const App = () => {
   const router = useMemo(() => {
     const routes = [
@@ -356,16 +337,24 @@ const App = () => {
                   </RouteSuspense>
                 ),
               },
-              {
-                path: "appearance",
-                element: (
-                  <RouteSuspense>
-                    <AppearanceSettingsPage />
-                  </RouteSuspense>
-                ),
-              },
-              {
-                path: "about",
+          {
+            path: "appearance",
+            element: (
+              <RouteSuspense>
+                <AppearanceSettingsPage />
+              </RouteSuspense>
+            ),
+          },
+          {
+            path: "admin",
+            element: (
+              <RouteSuspense>
+                <AdminUsersPage />
+              </RouteSuspense>
+            ),
+          },
+          {
+            path: "about",
                 element: (
                   <RouteSuspense>
                     <AboutSettingsPage />
