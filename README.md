@@ -25,6 +25,13 @@
 
 ---
 
+<p align="center">
+  <b>v2 rewrite progress</b><br>
+  <code>████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░</code> <b>20%</b>
+</p>
+
+---
+
 ## Purpose
 
 TelegramFileServer stores your files in Telegram chats via bots and serves them back to
