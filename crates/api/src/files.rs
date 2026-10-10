@@ -391,8 +391,8 @@ pub(crate) struct MediaQuery {
 
 /// Session for the media routes: Bearer header or `?token=`.
 ///
-/// Failures are 401 (not the `/api/*` 400) so browsers and players can tell
-/// "log in again" from "you asked for something wrong".
+/// Same 401-with-challenge answer as `require_session`, so browsers and
+/// players can tell "log in again" from "you asked for something wrong".
 pub(crate) fn require_media_session(
     headers: &HeaderMap,
     query_token: Option<&str>,

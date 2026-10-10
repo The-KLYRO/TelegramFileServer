@@ -6,7 +6,8 @@
 
 use axum::{
     Router,
-    extract::Path,
+    extract::{Path, Request},
+    middleware::{self, Next},
     response::{IntoResponse, Json, Redirect},
     routing::get,
 };
@@ -83,7 +84,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/webui/*rest", get(redirect_from_legacy_webui))
         .route("/setup.html", get(redirect_from_legacy_setup_html))
         .merge(api_router(String::new()))
-        .fallback_service(serve_dir);
+        .fallback_service(serve_dir)
+        .layer(middleware::from_fn(log_requests));
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -167,6 +169,23 @@ fn init_tracing(headless: bool) -> anyhow::Result<()> {
 async fn healthz() -> impl IntoResponse {
     let version = env!("CARGO_PKG_VERSION");
     Json(serde_json::json!({ "status": "ok", "version": version }))
+}
+
+/// One line per request: method, path, status, duration. Failures (>= 400)
+/// at warn, everything else at debug so the normal console stays quiet.
+async fn log_requests(req: Request, next: Next) -> impl IntoResponse {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let started = std::time::Instant::now();
+    let response = next.run(req).await;
+    let status = response.status();
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    if status.is_client_error() || status.is_server_error() {
+        tracing::warn!(%method, %path, %status, elapsed_ms, "request failed");
+    } else {
+        tracing::debug!(%method, %path, %status, elapsed_ms, "request");
+    }
+    response
 }
 
 /// The app moved from `/webui/…` to the origin root; keep old links working.

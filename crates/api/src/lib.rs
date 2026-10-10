@@ -14,7 +14,7 @@ use axum::{
         },
     },
     response::{IntoResponse, Response},
-    routing::{get, patch, post},
+    routing::{any, delete, get, patch, post},
 };
 use bytes::Bytes;
 use futures::TryStreamExt;
@@ -48,6 +48,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
 mod files;
+mod ui;
 
 /// Validate Step1Input manually (mirrors tfs-config validation)
 fn validate_step1(input: &Step1Input) -> Result<(), String> {
@@ -197,12 +198,16 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
 
 /// Require a valid session from the Authorization header.
 /// Returns the username on success, or an ApiError on failure.
+///
+/// Failures are 401 (with the `WWW-Authenticate` challenge), not 400, so
+/// browsers and clients can tell "log in again" from "you asked for
+/// something wrong".
 pub fn require_session(headers: &HeaderMap, store: &SessionStore) -> Result<String, ApiError> {
     let token = extract_bearer_token(headers).ok_or_else(|| {
-        ApiError::InvalidInput("missing or invalid Authorization header".to_string())
+        ApiError::Unauthorized("missing or invalid Authorization header".to_string())
     })?;
     validate_session(store, &token)
-        .ok_or_else(|| ApiError::InvalidInput("invalid or expired session".to_string()))
+        .ok_or_else(|| ApiError::Unauthorized("invalid or expired session".to_string()))
 }
 
 /// Username validation: 3-32 chars, [A-Za-z0-9_.-]
@@ -1647,6 +1652,9 @@ pub struct AppState {
     claims: ClaimStore,
     /// Lazily-started claim bot (its @username builds t.me deep links).
     claim_bot: Arc<tokio::sync::OnceCell<Arc<ClaimBotHandle>>>,
+    /// Broadcast bus for `/api/events` SSE subscribers. Payloads are JSON
+    /// objects shaped `{ "type": ..., "payload": ... }`.
+    events: tokio::sync::broadcast::Sender<serde_json::Value>,
 }
 
 impl AppState {
@@ -1660,7 +1668,17 @@ impl AppState {
             transfer: Arc::new(tokio::sync::OnceCell::new()),
             claims: Arc::new(Mutex::new(HashMap::new())),
             claim_bot: Arc::new(tokio::sync::OnceCell::new()),
+            events: tokio::sync::broadcast::channel(64).0,
         }
+    }
+
+    /// Publish one event to every `/api/events` SSE subscriber. A closed or
+    /// empty subscriber list is fine — nothing is listening yet.
+    pub fn publish_event(&self, event_type: &str, payload: serde_json::Value) {
+        let _ = self.events.send(serde_json::json!({
+            "type": event_type,
+            "payload": payload,
+        }));
     }
 
     /// The shared Mongo client, built on first use with the same fast timeouts
@@ -2771,6 +2789,24 @@ pub fn router(mongo_uri: String) -> Router {
         )
         .route("/api/admin/users/:username/resync", post(admin_resync_user))
         .route("/api/files/upload", post(files_upload))
+        // WebUI support: settings, favorites, recents, session probes, logs.
+        .route(
+            "/api/settings/:key",
+            get(ui::settings_get).put(ui::settings_put),
+        )
+        .route(
+            "/api/favorites",
+            get(ui::favorites_list).post(ui::favorites_add),
+        )
+        .route("/api/favorites/:id", delete(ui::favorites_remove))
+        .route("/api/recents", get(ui::recents_list).post(ui::recents_add))
+        .route("/api/session/readiness", get(ui::session_readiness))
+        .route("/api/session/auth", get(ui::session_auth))
+        .route("/api/logs", post(ui::logs_ingest))
+        .route("/api/events", get(ui::events_sse))
+        // Unknown /api/* paths answer JSON 404 instead of the SPA fallback
+        // (which serves index.html 200 and breaks response.json()).
+        .route("/api/*rest", any(ui::api_not_found))
         // Catch-all so a file name may contain slashes (a pasted path) and a
         // dot (every real file name).
         .route("/dl/*file_name", get(download_file))
@@ -3509,6 +3545,150 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(wrong_method.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    /// `require_session` challenges with 401 + `WWW-Authenticate` (not 400)
+    /// for both a missing and an unknown token — clients rely on the status
+    /// to decide between "log in again" and "you asked for something wrong".
+    #[test]
+    fn require_session_challenges_with_401() {
+        let store = new_session_store();
+
+        let missing = require_session(&HeaderMap::new(), &store).unwrap_err();
+        assert!(matches!(missing, ApiError::Unauthorized(_)));
+        let response = missing.into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(response.headers().contains_key(WWW_AUTHENTICATE));
+
+        let unknown = require_session(&bearer("deadbeef"), &store).unwrap_err();
+        assert!(matches!(unknown, ApiError::Unauthorized(_)));
+    }
+
+    /// Unknown /api/* paths answer JSON 404 so the SPA's fetchJson keeps its
+    /// "unexpected token '<'"-free error path; non-API paths stay on the
+    /// server's SPA fallback (covered by the test above).
+    #[tokio::test]
+    async fn unknown_api_paths_answer_json_404() {
+        use tower::ServiceExt;
+
+        let app = router("mongodb://127.0.0.1:1".to_string());
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/no/such/endpoint")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            value.get("error").and_then(|e| e.as_str()),
+            Some("not found")
+        );
+    }
+
+    /// /api/auth/me without a token is 401 with the Bearer challenge —
+    /// the SPA treats 400/401/403 alike, but the status is now semantically
+    /// correct for clients that distinguish them.
+    #[tokio::test]
+    async fn auth_me_without_token_challenges_with_401() {
+        use tower::ServiceExt;
+
+        let app = router("mongodb://127.0.0.1:1".to_string());
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/auth/me")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(response.headers().contains_key(WWW_AUTHENTICATE));
+    }
+
+    /// The session probes are public and always "ready" in the browser
+    /// build — no Mongo, no Telegram, no session required.
+    #[tokio::test]
+    async fn session_probes_are_public_and_ready() {
+        use tower::ServiceExt;
+
+        let app = router("mongodb://127.0.0.1:1".to_string());
+        for uri in ["/api/session/readiness", "/api/session/auth"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri(uri)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "uri: {uri}");
+            let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            if uri.ends_with("auth") {
+                assert_eq!(
+                    value.get("state").and_then(|s| s.as_str()),
+                    Some("authorizationStateReady")
+                );
+            } else {
+                assert_eq!(
+                    value.pointer("/credentials/state").and_then(|s| s.as_str()),
+                    Some("CredentialsReady")
+                );
+            }
+        }
+    }
+
+    /// POST /api/logs accepts a well-formed line with 204 and rejects an
+    /// unknown level with 400 (no Mongo needed — the handler only traces).
+    #[tokio::test]
+    async fn logs_ingest_validates_level_without_touching_mongo() {
+        use tower::ServiceExt;
+
+        let app = router("mongodb://127.0.0.1:1".to_string());
+
+        let ok = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/logs")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::json!({ "level": "info", "message": "hello" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), StatusCode::NO_CONTENT);
+
+        let bad = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/logs")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::json!({ "level": "verbose", "message": "nope" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
     }
 
     // ===== Auth integration tests (require MongoDB) =====
@@ -4612,5 +4792,155 @@ mod tests {
             matches!(bogus_token, ApiError::Unauthorized(_)),
             "expected Unauthorized, got {bogus_token:?}"
         );
+    }
+
+    /// Settings, favorites, and recents round-trip through a real database:
+    /// every handler runs with a live session; a missing setting is a 404
+    /// whose body has no `error` key (the SPA's null convention).
+    ///
+    /// Run with: cargo test -p tfs-api -- --ignored --test-threads=1
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore]
+    async fn ui_settings_favorites_recents_roundtrip() {
+        use http_body_util::BodyExt;
+
+        let uri = test_mongo_uri();
+        let client = connect(&uri).await.unwrap();
+        let db = client.database(&data_database_name());
+        for name in ["v2_settings", "v2_favorites", "v2_recents"] {
+            db.collection::<mongodb::bson::Document>(name)
+                .delete_many(doc! {})
+                .await
+                .unwrap();
+        }
+
+        let state = test_state(&uri);
+        let token = create_session(&state.sessions, "testuser".to_string());
+        let headers = bearer(&token);
+        let state = State(state);
+
+        // Missing setting: 404, JSON body, and no `error` field.
+        let missing = ui::settings_get(
+            state.clone(),
+            headers.clone(),
+            Path("explorer.view_mode".to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        let body = missing.into_body().collect().await.unwrap().to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            value.get("error").is_none(),
+            "missing-setting body must not carry an error key: {value}"
+        );
+
+        // Store then read back the same JSON value.
+        ui::settings_put(
+            state.clone(),
+            headers.clone(),
+            Path("explorer.view_mode".to_string()),
+            Json(serde_json::json!("grid")),
+        )
+        .await
+        .unwrap();
+        let stored = ui::settings_get(
+            state.clone(),
+            headers.clone(),
+            Path("explorer.view_mode".to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(stored.status(), StatusCode::OK);
+        let body = stored.into_body().collect().await.unwrap().to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value, serde_json::json!("grid"));
+
+        // Favorites: add two, list, remove one.
+        ui::favorites_add(
+            state.clone(),
+            headers.clone(),
+            Json(ui::FavoriteAddRequest {
+                path: "/Home/Images".to_string(),
+                label: "Images".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        ui::favorites_add(
+            state.clone(),
+            headers.clone(),
+            Json(ui::FavoriteAddRequest {
+                path: "/Home/Videos".to_string(),
+                label: "Videos".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        let listed = ui::favorites_list(state.clone(), headers.clone())
+            .await
+            .unwrap();
+        assert_eq!(listed.0.len(), 2);
+        let first = &listed.0[0];
+        assert_eq!(first.path, "/Home/Images");
+        ui::favorites_remove(state.clone(), headers.clone(), Path(first.id.to_string()))
+            .await
+            .unwrap();
+        let after_remove = ui::favorites_list(state.clone(), headers.clone())
+            .await
+            .unwrap();
+        assert_eq!(after_remove.0.len(), 1);
+        assert_eq!(after_remove.0[0].path, "/Home/Videos");
+
+        // Recents: one visit, then list returns it with an RFC3339 stamp.
+        ui::recents_add(
+            state.clone(),
+            headers.clone(),
+            Json(ui::RecentAddRequest {
+                path: "/Home".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        // Re-visiting the same path must not duplicate the row.
+        ui::recents_add(
+            state.clone(),
+            headers.clone(),
+            Json(ui::RecentAddRequest {
+                path: "/Home".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        let recents = ui::recents_list(
+            state.clone(),
+            headers.clone(),
+            Query(ui::RecentsQuery { limit: None }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(recents.0.len(), 1);
+        assert_eq!(recents.0[0].path, "/Home");
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(&recents.0[0].last_opened).is_ok(),
+            "last_opened must be RFC3339: {}",
+            recents.0[0].last_opened
+        );
+
+        // Favorites are owner-scoped: a second session (same store, other
+        // user) sees none of the rows above.
+        let other_headers = bearer(&create_session(&state.sessions, "other".to_string()));
+        let other = ui::favorites_list(state.clone(), other_headers.clone())
+            .await
+            .unwrap();
+        assert!(other.0.is_empty());
+        let other_missing = ui::settings_get(
+            state.clone(),
+            other_headers,
+            Path("explorer.view_mode".to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(other_missing.status(), StatusCode::NOT_FOUND);
     }
 }
