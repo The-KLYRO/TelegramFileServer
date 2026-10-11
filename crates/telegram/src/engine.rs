@@ -327,6 +327,19 @@ mod tests {
         fn session_path(&self) -> &Path {
             Path::new("test.session")
         }
+
+        async fn list_history(
+            &self,
+            _chat_id: i64,
+            _offset_id: i32,
+            _limit: u32,
+        ) -> Result<Vec<(SentMedia, Option<String>)>> {
+            Ok(vec![])
+        }
+
+        async fn get_profile_photo(&self, _user_id: i64) -> Result<Option<Vec<u8>>> {
+            Ok(None)
+        }
     }
 
     #[tokio::test]
