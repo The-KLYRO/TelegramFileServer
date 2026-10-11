@@ -29,6 +29,11 @@ export const resolveThumbnailSrc = (
     return value;
   }
 
+  // Server-relative URLs (/api/fs/media?…) need no conversion.
+  if (value.startsWith("/")) {
+    return value;
+  }
+
   const normalizedPath = value.replace(/\\/g, "/");
   const candidates = Array.from(new Set([value, normalizedPath]));
 
