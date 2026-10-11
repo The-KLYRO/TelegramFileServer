@@ -27,7 +27,7 @@
 
 <p align="center">
   <b>v2 rewrite progress</b><br>
-  <img src="https://geps.dev/progress/20" alt="v2 progress 20%">
+  <img src="https://geps.dev/progress/30" alt="v2 progress 30%">
 </p>
 
 ---
@@ -204,13 +204,18 @@ The rewrite lives on `v2`, which is becoming the default branch as `v1` retires.
 |---|---|
 | `crates/telegram` transfer engine (Grammers behind a `TelegramClient` trait) | ✅ Written |
 | Upload / download / ranged streaming / cancellation / FloodWait retry | ✅ Implemented |
-| Offline unit tests · clippy · fmt · release build | ✅ 7 passing, all clean |
+| Offline unit tests · clippy · fmt · workspace tests | ✅ 113 passing, all clean |
 | Live Telegram scenarios | ⏳ **Not yet run — all `NOT RUN`** |
-| Setup wizard (`crates/config` + `crates/db` + `crates/api` + `crates/server`) | 🔨 In progress |
+| Setup wizard + Telegram-verified accounts (claim bot, encrypted config) | ✅ Implemented |
+| HTTP API: session auth, admin, explorer, favorites/recents/settings, SSE events | ✅ Implemented |
+| Mongo-backed VFS (folders, recycle bin, gallery) + media serving by message id | ✅ Implemented |
+| WebUI wired to the HTTP API (Telegram IPC commands, uploads, progress events) | ✅ Implemented |
+| Notes compose/edit, message forward, history indexing for phone uploads | ⏳ Not yet supported |
 | `crates/auth`, `crates/app-core`, `crates/jobs`, `apps/fileServerApp`, `tests/` | ⏳ Placeholders |
 
-Read it as: **the engine and its test harness are ready and the setup wizard is being
-built; the live Telegram run is still pending.** Do not expect v2 to move real files yet.
+Read it as: **the wizard, API, Mongo VFS, and webUI are wired end-to-end for accounts
+created through setup; the live Telegram scenario checklist, notes/forward integrations,
+and history indexing for phone-uploaded files are the next gaps.**
 
 - [`crates/telegram/README.md`](crates/telegram/README.md) — the engine's own docs
 - [`crates/telegram/POC_RESULTS.md`](crates/telegram/POC_RESULTS.md) — live-scenario checklist, currently `NOT RUN`
