@@ -163,6 +163,10 @@ struct ClaimEntry {
     verified_by: Option<i64>,
     /// The verifier's public @username, when their profile exposed one.
     verified_username: Option<String>,
+    /// The verifier's Telegram first name, when their profile exposed one.
+    verified_first_name: Option<String>,
+    /// The verifier's Telegram last name, when their profile exposed one.
+    verified_last_name: Option<String>,
 }
 
 impl ClaimEntry {
@@ -174,6 +178,8 @@ impl ClaimEntry {
             expected_sender,
             verified_by: None,
             verified_username: None,
+            verified_first_name: None,
+            verified_last_name: None,
         }
     }
 }
@@ -323,6 +329,12 @@ struct UserDoc {
     telegram_user_id: Option<i64>,
     #[serde(default)]
     telegram_username: Option<String>,
+    /// Telegram first name, captured at claim time from the verifier.
+    #[serde(default)]
+    telegram_first_name: Option<String>,
+    /// Telegram last name, captured at claim time from the verifier.
+    #[serde(default)]
+    telegram_last_name: Option<String>,
     #[serde(default = "default_permissions")]
     permissions: Permissions,
     /// Private Telegram chat that receives this account's uploads. `None`
@@ -533,6 +545,9 @@ struct MeResponse {
     permissions: Permissions,
     telegram_username: Option<String>,
     telegram_user_id: Option<i64>,
+    first_name: Option<String>,
+    last_name: Option<String>,
+    has_profile_photo: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -770,6 +785,8 @@ async fn auth_register(
             &owner_name,
             &input.username,
             password_hash,
+            None,
+            None,
         )
         .await?;
         return Ok(Json(RegisterResponse { ok: true, username }));
@@ -805,6 +822,8 @@ async fn bootstrap_owner_account(
     owner_name: &str,
     typed_username: &str,
     password_hash: String,
+    first_name: Option<String>,
+    last_name: Option<String>,
 ) -> ApiResult<String> {
     match find_user(client, typed_username).await? {
         None => {
@@ -824,6 +843,8 @@ async fn bootstrap_owner_account(
                 role: "admin".to_string(),
                 telegram_user_id: owner_id,
                 telegram_username: Some(owner_name.to_string()),
+                telegram_first_name: first_name,
+                telegram_last_name: last_name,
                 permissions: default_permissions(),
                 storage_chat_id: None,
                 created_at: chrono::Utc::now(),
@@ -917,6 +938,9 @@ async fn auth_me(
         permissions: user.permissions,
         telegram_username: user.telegram_username,
         telegram_user_id: user.telegram_user_id,
+        first_name: user.telegram_first_name,
+        last_name: user.telegram_last_name,
+        has_profile_photo: user.telegram_user_id.is_some(),
     }))
 }
 
@@ -1111,6 +1135,8 @@ async fn claim_confirm(
             &owner_name,
             &claim.username,
             password_hash,
+            claim.verified_first_name.clone(),
+            claim.verified_last_name.clone(),
         )
         .await?
     } else {
@@ -1134,6 +1160,12 @@ async fn claim_confirm(
         }
         if let Some(name) = &claim.verified_username {
             fields.insert("telegram_username", bson::Bson::from(name.clone()));
+        }
+        if let Some(first_name) = &claim.verified_first_name {
+            fields.insert("telegram_first_name", bson::Bson::from(first_name.clone()));
+        }
+        if let Some(last_name) = &claim.verified_last_name {
+            fields.insert("telegram_last_name", bson::Bson::from(last_name.clone()));
         }
         if !fields.is_empty() {
             update_user_fields(&client, &existing.id, fields).await?;
@@ -1342,6 +1374,8 @@ async fn auth_change_username(
         role: me.role.clone(),
         telegram_user_id,
         telegram_username,
+        telegram_first_name: me.telegram_first_name.clone(),
+        telegram_last_name: me.telegram_last_name.clone(),
         permissions: me.permissions,
         storage_chat_id: me.storage_chat_id,
         created_at: me.created_at,
@@ -1656,6 +1690,22 @@ pub struct AppState {
     /// Broadcast bus for `/api/events` SSE subscribers. Payloads are JSON
     /// objects shaped `{ "type": ..., "payload": ... }`.
     events: tokio::sync::broadcast::Sender<serde_json::Value>,
+    /// Shared state for the history indexer: whether a run is active and
+    /// how many messages it has scanned/indexed so far. Guarded by a mutex
+    /// so only one indexing task runs at a time per process.
+    indexer: Arc<tokio::sync::Mutex<IndexerState>>,
+    /// Per-user Telegram profile-photo cache (tg user id → bytes + timestamp).
+    photo_cache: Arc<Mutex<HashMap<i64, CachedPhoto>>>,
+}
+
+/// Snapshot of the history indexer's progress, published via SSE and
+/// returned by `POST /api/fs/index` when a run is already in flight.
+#[derive(Debug, Clone, Default)]
+struct IndexerState {
+    running: bool,
+    scanned: u64,
+    indexed: u64,
+    last_error: Option<String>,
 }
 
 impl AppState {
@@ -1670,6 +1720,8 @@ impl AppState {
             claims: Arc::new(Mutex::new(HashMap::new())),
             claim_bot: Arc::new(tokio::sync::OnceCell::new()),
             events: tokio::sync::broadcast::channel(64).0,
+            indexer: Arc::new(tokio::sync::Mutex::new(IndexerState::default())),
+            photo_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -1812,6 +1864,8 @@ impl AppState {
                                                 entry.verified = true;
                                                 entry.verified_by = Some(ev.sender_id);
                                                 entry.verified_username = ev.sender_username;
+                                                entry.verified_first_name = ev.sender_first_name;
+                                                entry.verified_last_name = ev.sender_last_name;
                                                 "Verified. Return to TelegramFileServer to finish creating your account.".to_string()
                                             }
                                         }
@@ -2241,6 +2295,8 @@ async fn admin_create_user(
         role: "user".to_string(),
         telegram_user_id,
         telegram_username,
+        telegram_first_name: None,
+        telegram_last_name: None,
         permissions: default_permissions(),
         storage_chat_id: None,
         created_at: chrono::Utc::now(),
@@ -2686,6 +2742,291 @@ struct MediaByMessageQuery {
     inline: Option<bool>,
 }
 
+// ===== Profile photo + history indexing =====
+
+/// In-process cache for the owner's Telegram profile photo: the bytes and
+/// the instant they were fetched. Avoids re-downloading on every page load.
+struct CachedPhoto {
+    bytes: Vec<u8>,
+    fetched_at: Instant,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProfilePhotoQuery {
+    token: Option<String>,
+}
+
+/// GET /api/auth/profile-photo — the signed-in account's Telegram profile
+/// photo as `image/jpeg`. Accepts either a Bearer header or a `?token=`
+/// query parameter (the latter for `<img src>` loads). 404 when the account
+/// has no photo or the lookup fails (the frontend degrades to initials).
+async fn auth_profile_photo(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<ProfilePhotoQuery>,
+) -> ApiResult<Response> {
+    let username = files::require_media_session(&headers, query.token.as_deref(), &state.sessions)?;
+    let client = state.mongo_client().await?;
+    let user = find_user(&client, &username)
+        .await?
+        .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
+    let Some(tg_id) = user.telegram_user_id else {
+        return Err(ApiError::NotFound("no Telegram account linked".to_string()));
+    };
+
+    // Serve from cache when fresh (10 minutes).
+    {
+        let cache = state.photo_cache.lock().unwrap();
+        if let Some(entry) = cache.get(&tg_id)
+            && entry.fetched_at.elapsed() < Duration::from_secs(600)
+        {
+            return Ok(photo_response(&entry.bytes));
+        }
+    }
+
+    let pool = state.transfer_pool().await?;
+    let lease = pool
+        .lease()
+        .await
+        .map_err(|e| ApiError::Telegram(e.to_string()))?;
+    let photo = lease
+        .client()
+        .get_profile_photo(tg_id)
+        .await
+        .map_err(|e| ApiError::Telegram(format!("could not fetch profile photo: {e}")))?;
+    drop(lease);
+
+    match photo {
+        Some(bytes) => {
+            let mut cache = state.photo_cache.lock().unwrap();
+            cache.insert(
+                tg_id,
+                CachedPhoto {
+                    bytes: bytes.clone(),
+                    fetched_at: Instant::now(),
+                },
+            );
+            Ok(photo_response(&bytes))
+        }
+        None => Err(ApiError::NotFound("no profile photo".to_string())),
+    }
+}
+
+fn photo_response(bytes: &[u8]) -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "image/jpeg")
+        .header(CACHE_CONTROL, "private, max-age=600")
+        .body(Body::from(bytes.to_vec()))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// Response body for `POST /api/fs/index`. Mirrors the shape the webUI
+/// already expects from the old `tg_index_saved_messages` command.
+#[derive(Debug, Serialize)]
+struct IndexStartResponse {
+    total_new_messages: u64,
+    started_from_empty_db: bool,
+    saved_messages_chat_id: i64,
+    historical_sync_complete: bool,
+    indexed_count: u64,
+}
+
+/// POST /api/fs/index — start (or join) a background history-index task.
+///
+/// Pages the account's storage chat from newest to oldest, upserting a
+/// `FileDoc` for every media message. Progress is published over SSE as
+/// `account_sync_changed` snapshots; individual items as `tg-update-received`.
+async fn fs_index(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResult<Json<IndexStartResponse>> {
+    let username = require_session(&headers, &state.sessions)?;
+    let mongo = state.mongo_client().await?;
+    let user = find_user(&mongo, &username)
+        .await?
+        .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
+
+    let chat_id = storage_chat_for(&user, default_chat_id(&mongo).await?);
+
+    // Detect an empty DB so the frontend can show "first-run backfill".
+    let files_coll = mongo
+        .database(&data_database_name())
+        .collection::<files::FileDoc>(files::FileDoc::COLLECTION_NAME);
+    let existing = files_coll
+        .count_documents(doc! { "owner_id": &user.id })
+        .await
+        .map_err(|e| ApiError::Database(DbError::Connection(e)))?;
+    let started_from_empty = existing == 0;
+
+    // If a run is already active, return its current snapshot instead of
+    // starting a second one.
+    {
+        let mut state_guard = state.indexer.lock().await;
+        if state_guard.running {
+            let indexed = state_guard.indexed;
+            return Ok(Json(IndexStartResponse {
+                total_new_messages: 0,
+                started_from_empty_db: started_from_empty,
+                saved_messages_chat_id: chat_id,
+                historical_sync_complete: false,
+                indexed_count: indexed,
+            }));
+        }
+        state_guard.running = true;
+        state_guard.scanned = 0;
+        state_guard.indexed = 0;
+        state_guard.last_error = None;
+    }
+
+    // Publish the initial "Syncing" snapshot so the toolbar reacts immediately.
+    state.publish_event(
+        "account_sync_changed",
+        serde_json::json!({ "state": "Syncing", "indexed_count": 0u64 }),
+    );
+
+    // Spawn the background indexing task.
+    let state_clone = Arc::clone(&state);
+    let mongo_clone = mongo.clone();
+    let user_id = user.id.clone();
+    let owner_username = user.username.clone();
+    tokio::spawn(async move {
+        let result = run_history_index(&state_clone, &mongo_clone, &user_id, chat_id).await;
+        let mut guard = state_clone.indexer.lock().await;
+        guard.running = false;
+        match result {
+            Ok(indexed) => {
+                tracing::info!(
+                    "history index complete for {owner_username}: {indexed} new file(s)"
+                );
+                state_clone.publish_event(
+                    "account_sync_changed",
+                    serde_json::json!({ "state": "UpToDate", "indexed_count": indexed }),
+                );
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "history index failed for {owner_username}");
+                guard.last_error = Some(e.to_string());
+                state_clone.publish_event(
+                    "account_sync_changed",
+                    serde_json::json!({ "state": { "Error": { "message": e.to_string() } } }),
+                );
+            }
+        }
+    });
+
+    Ok(Json(IndexStartResponse {
+        total_new_messages: 0,
+        started_from_empty_db: started_from_empty,
+        saved_messages_chat_id: chat_id,
+        historical_sync_complete: false,
+        indexed_count: 0,
+    }))
+}
+
+/// Folder that a given media type belongs to inside the virtual VFS.
+fn folder_for_media(media_type: MediaType) -> &'static str {
+    match media_type {
+        MediaType::Photo => "/Home/Images",
+        MediaType::Video => "/Home/Videos",
+        MediaType::Audio | MediaType::Voice => "/Home/Audio",
+        _ => "/Home/Documents",
+    }
+}
+
+/// Core indexing loop: page history newest→oldest, upsert FileDocs, publish
+/// progress. Returns the number of newly-inserted documents.
+async fn run_history_index(
+    state: &Arc<AppState>,
+    mongo: &Client,
+    owner_id: &str,
+    chat_id: i64,
+) -> Result<u64, ApiError> {
+    let pool = state.transfer_pool().await?;
+    let files_coll = mongo
+        .database(&data_database_name())
+        .collection::<files::FileDoc>(files::FileDoc::COLLECTION_NAME);
+
+    let mut offset_id: i32 = 0;
+    let mut total_new: u64 = 0;
+    let mut scanned: u64 = 0;
+    const PAGE: u32 = 100;
+
+    loop {
+        let lease = pool
+            .lease()
+            .await
+            .map_err(|e| ApiError::Telegram(e.to_string()))?;
+        let client = lease.client();
+        let page = client
+            .list_history(chat_id, offset_id, PAGE)
+            .await
+            .map_err(|e| ApiError::Telegram(format!("history listing failed: {e}")))?;
+        drop(lease);
+
+        if page.is_empty() {
+            break;
+        }
+
+        // Walk the page oldest→newest so offset_id ends at the smallest id.
+        let mut page_new: u64 = 0;
+        for (sent, caption) in &page {
+            scanned += 1;
+            let folder = folder_for_media(sent.media_type);
+            let mut doc =
+                files::FileDoc::new(owner_id, folder, &sent.file_name, sent.file_size, sent, 0);
+            doc.caption = caption.clone();
+            // Overwrite any previous record for this (owner, folder, name)
+            // so re-indexing refreshes message ids instead of failing on
+            // a duplicate key.
+            let _ = files_coll
+                .replace_one(doc! { "_id": &doc.id }, &doc)
+                .upsert(true)
+                .await;
+            page_new += 1;
+
+            // Live explorer refresh: one event per indexed message.
+            let folder_kind = match sent.media_type {
+                MediaType::Photo => "Images",
+                MediaType::Video => "Videos",
+                MediaType::Audio | MediaType::Voice => "Audio",
+                _ => "Documents",
+            };
+            state.publish_event(
+                "tg-update-received",
+                serde_json::json!({
+                    "message_id": sent.message_id,
+                    "folder_kind": folder_kind,
+                }),
+            );
+        }
+
+        total_new += page_new;
+
+        // Progress snapshot after every page.
+        {
+            let mut guard = state.indexer.lock().await;
+            guard.scanned = scanned;
+            guard.indexed = total_new;
+        }
+        state.publish_event(
+            "account_sync_changed",
+            serde_json::json!({ "state": "Syncing", "indexed_count": total_new }),
+        );
+
+        // Advance offset to the oldest message id seen in this page.
+        match page.iter().map(|(s, _)| s.message_id).min() {
+            Some(min_id) if min_id < offset_id || offset_id == 0 => offset_id = min_id,
+            _ => break,
+        }
+
+        // Yield briefly so SSE flushes and the HTTP server stays responsive.
+        tokio::task::yield_now().await;
+    }
+
+    Ok(total_new)
+}
+
 /// The range/stream body, shared by the name-keyed and message-keyed media
 /// routes once the record (and the caller's read permission) are settled.
 async fn serve_media_doc(
@@ -2820,6 +3161,7 @@ pub fn router(mongo_uri: String) -> Router {
         .route("/api/auth/claim/confirm", post(claim_confirm))
         .route("/api/auth/claim/available", get(claim_available))
         .route("/api/auth/me", get(auth_me))
+        .route("/api/auth/profile-photo", get(auth_profile_photo))
         .route("/api/auth/logout", post(auth_logout))
         .route("/api/auth/username-available", get(auth_username_available))
         .route("/api/auth/change-username", post(auth_change_username))
@@ -2864,6 +3206,7 @@ pub fn router(mongo_uri: String) -> Router {
         .route("/api/fs/delete", post(vfs::delete_items))
         .route("/api/fs/gallery", get(vfs::gallery))
         .route("/api/fs/media", get(media_by_message))
+        .route("/api/fs/index", post(fs_index))
         // Unknown /api/* paths answer JSON 404 instead of the SPA fallback
         // (which serves index.html 200 and breaks response.json()).
         .route("/api/*rest", any(ui::api_not_found))

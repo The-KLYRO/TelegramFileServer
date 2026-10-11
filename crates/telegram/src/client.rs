@@ -113,6 +113,26 @@ pub trait TelegramClient: Send + Sync {
 
     /// Get the session file path
     fn session_path(&self) -> &Path;
+
+    /// List a page of message history from a chat, newest first.
+    ///
+    /// Only messages that carry media (photo/document) are returned, each
+    /// paired with its caption text (if any). `offset_id` is exclusive: pass
+    /// 0 for the newest page, then the smallest id seen so far to walk
+    /// older messages.
+    async fn list_history(
+        &self,
+        chat_id: i64,
+        offset_id: i32,
+        limit: u32,
+    ) -> Result<Vec<(SentMedia, Option<String>)>>;
+
+    /// Download a user's current profile photo (largest available size).
+    ///
+    /// Returns `Ok(None)` when the account has no profile photo or the
+    /// photo cannot be fetched — callers should degrade gracefully rather
+    /// than treat this as an error.
+    async fn get_profile_photo(&self, user_id: i64) -> Result<Option<Vec<u8>>>;
 }
 
 /// Grammers-based implementation of the TelegramClient trait
@@ -713,5 +733,64 @@ impl TelegramClient for GrammersClient {
 
     fn session_path(&self) -> &Path {
         &self.session_path
+    }
+
+    async fn list_history(
+        &self,
+        chat_id: i64,
+        offset_id: i32,
+        limit: u32,
+    ) -> Result<Vec<(SentMedia, Option<String>)>> {
+        let client = self.ensure_connected().await?;
+        let peer = self.resolve_peer(chat_id)?;
+
+        let mut iter = client
+            .iter_messages(peer)
+            .limit(limit as usize)
+            .offset_id(offset_id);
+
+        let mut out = Vec::new();
+        while let Some(message) = iter.next().await? {
+            if message.media().is_none() {
+                continue;
+            }
+            let caption = {
+                let text = message.text();
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text.to_string())
+                }
+            };
+            let sent = self.extract_sent_media(&message)?;
+            out.push((sent, caption));
+        }
+        Ok(out)
+    }
+
+    async fn get_profile_photo(&self, user_id: i64) -> Result<Option<Vec<u8>>> {
+        let client = self.ensure_connected().await?;
+
+        let Some(peer_id) = grammers_session::types::PeerId::user(user_id) else {
+            return Ok(None);
+        };
+        let peer = peer_id.to_ambient_ref();
+
+        let mut photos = client.iter_profile_photos(peer);
+        let Some(photo) = photos.next().await? else {
+            return Ok(None);
+        };
+
+        let mut bytes = Vec::new();
+        let mut download = client.iter_download(&photo);
+        while let Some(chunk) = download.next().await? {
+            bytes.extend_from_slice(&chunk);
+            // Cap at 5 MiB — avatars are never that large; a runaway
+            // download would mean something is wrong with the peer.
+            if bytes.len() > 5 * 1024 * 1024 {
+                break;
+            }
+        }
+        Ok(Some(bytes))
     }
 }
