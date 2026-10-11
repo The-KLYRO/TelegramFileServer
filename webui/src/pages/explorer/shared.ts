@@ -123,13 +123,6 @@ export interface TelegramChatDriveItemsPage {
   next_offset: number;
 }
 
-export type ChatDriveCandidate = {
-  id: number;
-  title: string;
-  kind?: string;
-  profilePhoto?: string | null;
-};
-
 export type TelegramChatSummaryDto = {
   id: number;
   title: string;

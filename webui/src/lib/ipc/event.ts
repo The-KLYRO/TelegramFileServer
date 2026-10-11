@@ -7,7 +7,11 @@ function getEventSource(): EventSource | null {
   if (eventSource) return eventSource;
 
   try {
-    const es = new EventSource("/api/events");
+    const token = localStorage.getItem("tfs_token");
+    const url = token
+      ? `/api/events?token=${encodeURIComponent(token)}`
+      : "/api/events";
+    const es = new EventSource(url);
     es.onerror = () => {
       // Suppress browser console errors for failed SSE connection
       es.close();

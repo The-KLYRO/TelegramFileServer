@@ -9,7 +9,6 @@ import {
   type UploadDraftEntry,
 } from "@/components/skybox/UploadConfirmWidget";
 import {
-  type ChatDriveCandidate,
   type ClipboardMode,
   type DbError,
   type DownloadProgressPayload,
@@ -86,7 +85,6 @@ type UseExplorerFileActionsArgs = {
     React.SetStateAction<DownloadProgressPayload | null>
   >;
   setActivePaste: React.Dispatch<React.SetStateAction<any>>;
-  setChatDriveCandidatesQuery: React.Dispatch<React.SetStateAction<string>>;
   setClipboardItem: React.Dispatch<
     React.SetStateAction<ExplorerClipboardItem | null>
   >;
@@ -106,12 +104,10 @@ type UseExplorerFileActionsArgs = {
   setSavedItemsOffset: React.Dispatch<React.SetStateAction<number>>;
   setSelectedFile: React.Dispatch<React.SetStateAction<FileItem | null>>;
   setSelectedPaths: React.Dispatch<React.SetStateAction<string[]>>;
-  setShareTarget: React.Dispatch<React.SetStateAction<FileItem | null>>;
   setUploadConfirmDraft: React.Dispatch<
     React.SetStateAction<UploadConfirmDraft | null>
   >;
   setUploadPremiumUser: React.Dispatch<React.SetStateAction<boolean | null>>;
-  shareTarget: FileItem | null;
   showFavoritesRef: React.MutableRefObject<boolean>;
   uploadManagerRef: React.MutableRefObject<any>;
   uploadPremiumUser: boolean | null;
@@ -181,10 +177,8 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
     setRenameValue,
     setSelectedFile,
     setSelectedPaths,
-    setShareTarget,
     setUploadConfirmDraft,
     setUploadPremiumUser,
-    shareTarget,
     showFavoritesRef,
     uploadManagerRef,
     uploadPremiumUser,
@@ -860,47 +854,6 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
     setRenameValue,
   ]);
 
-  const handleShare = useCallback(
-    async (targetFile?: FileItem | null) => {
-      const file = targetFile ?? selectedFile;
-      if (!file || file.isDirectory) return;
-      setShareTarget(file);
-    },
-    [selectedFile, setShareTarget],
-  );
-
-  const handleShareClose = useCallback(
-    () => setShareTarget(null),
-    [setShareTarget],
-  );
-
-  const handleShareToContact = useCallback(
-    async (chatId: number) => {
-      if (!shareTarget || !shareTarget.messageId) {
-        toast({
-          title: "Share failed",
-          description: "Unable to share this item",
-          variant: "destructive",
-        });
-        return;
-      }
-      try {
-        await invoke("tg_forward_message", {
-          messageId: shareTarget.messageId,
-          chatId,
-        });
-        toast({ title: "Shared", description: "Item forwarded successfully" });
-      } catch {
-        toast({
-          title: "Share failed",
-          description: "Unable to share this item",
-          variant: "destructive",
-        });
-      }
-    },
-    [shareTarget],
-  );
-
   const handleCopyNoteText = useCallback(
     async (targetFile?: FileItem | null) => {
       const file = targetFile ?? selectedFile;
@@ -1344,9 +1297,6 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
     handleRestoreAllFromRecycleBin,
     handleRestoreFromRecycleBin,
     handleSendNoteMessage,
-    handleShare,
-    handleShareClose,
-    handleShareToContact,
     handleStageClipboardItem,
     handleToggleFavorite: async (targetFile?: FileItem | null) => {
       const file = targetFile ?? selectedFile;
