@@ -70,8 +70,9 @@ export default function LoadingPage() {
             return;
           }
 
-          // require_session maps a missing/expired token to 400 (and a
+          // require_session maps a missing/expired token to 401 (and a
           // deleted account to 403) — clear the stale token in all of them.
+          // 400 is kept for tolerance with older servers.
           if (
             response.status === 400 ||
             response.status === 401 ||
