@@ -71,8 +71,9 @@ fn validate_setting_key(key: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// GET /api/settings/:key — the stored JSON value, or a 404 whose body has
-/// no `error` field (the SPA maps "HTTP 404" to a missing setting).
+/// GET /api/settings/:key — the stored JSON value, or `null` when unset.
+/// Returning 200 + null (instead of 404) keeps the console clean: the SPA
+/// already treats a missing value as "use the default".
 pub(crate) async fn settings_get(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -86,11 +87,7 @@ pub(crate) async fn settings_get(
         .await
         .map_err(mongo_err)?
     else {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "detail": "not_set" })),
-        )
-            .into_response());
+        return Ok(Json(serde_json::Value::Null).into_response());
     };
     Ok(([(CONTENT_TYPE, "application/json")], doc.value_json).into_response())
 }
