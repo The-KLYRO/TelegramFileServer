@@ -7,7 +7,6 @@ import {
   Trash2,
   Copy,
   Edit3,
-  Share,
   FileText,
   Info,
   ArrowDownToLine,
@@ -58,7 +57,6 @@ interface ContextMenuProps {
   onRename: (file: FileItem) => void;
   onNewFolder: () => void;
   onPaste: () => void;
-  onShare: (file: FileItem) => void;
   onDownload: (file: FileItem) => void;
   onCopyNoteText: (file: FileItem) => void;
   onEditNoteMessage: (file: FileItem) => void;
@@ -180,7 +178,6 @@ export const ContextMenu = forwardRef<HTMLDivElement, ContextMenuProps>(
       onRename,
       onNewFolder,
       onPaste,
-      onShare,
       onDownload,
       onCopyNoteText,
       onEditNoteMessage,
@@ -378,19 +375,6 @@ export const ContextMenu = forwardRef<HTMLDivElement, ContextMenuProps>(
               ) : isMultiSelectionContextMenu ? (
                 <>
                   <button
-                    className={contextMenuItemClassName}
-                    onClick={() => {
-                      onClose();
-                      onShare(contextTargetFile!);
-                    }}
-                  >
-                    <Share className="w-4 h-4 text-muted-foreground" />
-                    <span>Share</span>
-                  </button>
-
-                  <div className="my-1 h-px bg-border" />
-
-                  <button
                     className={contextMenuDangerItemClassName}
                     onClick={() => {
                       onClose();
@@ -474,17 +458,6 @@ export const ContextMenu = forwardRef<HTMLDivElement, ContextMenuProps>(
                       >
                         <ArrowDownToLine className="w-4 h-4 text-muted-foreground" />
                         <span>Download</span>
-                      </button>
-
-                      <button
-                        className={contextMenuItemClassName}
-                        onClick={() => {
-                          onClose();
-                          onShare(contextTargetFile!);
-                        }}
-                      >
-                        <Share className="w-4 h-4 text-muted-foreground" />
-                        <span>Share</span>
                       </button>
                     </>
                   )}

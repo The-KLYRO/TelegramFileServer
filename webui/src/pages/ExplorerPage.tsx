@@ -156,7 +156,6 @@ export default function ExplorerPage() {
     handleContextDelete,
     handleContextDetails,
     handlePaste,
-    handleShare,
     handleCopyNoteText,
     handleEditNoteMessage,
     handleRestoreAllFromRecycleBin,
@@ -194,24 +193,10 @@ export default function ExplorerPage() {
     isMultiDelete,
     deleteTarget,
     handleDelete,
-    shareTarget,
-    handleShareClose,
-    handleShareToContact,
-    handleSearchContacts,
-    handleGetRecentChats,
     uploadConfirmDraft,
     uploadPremiumUser,
     setUploadConfirmDraft,
     handleConfirmUploadDraft,
-    isChatDrivePickerOpen,
-    chatDriveCandidates,
-    isChatDriveCandidatesLoading,
-    chatDriveCandidatesQuery,
-    setChatDriveCandidatesQuery,
-    pendingChatDriveCandidate,
-    setPendingChatDriveCandidate,
-    setIsChatDrivePickerOpen,
-    handleConfirmChatDriveCandidate,
   } = useExplorerPageController();
 
   useReactPageLogger(
@@ -452,7 +437,6 @@ export default function ExplorerPage() {
         onRename={handleRename}
         onNewFolder={handleNewFolder}
         onPaste={handlePaste}
-        onShare={handleShare}
         onCopyNoteText={handleCopyNoteText}
         onEditNoteMessage={handleEditNoteMessage}
         onRestoreFromRecycleBin={handleRestoreFromRecycleBin}
@@ -512,24 +496,10 @@ export default function ExplorerPage() {
           void handleDelete(targets);
         }}
         onCancelDelete={() => setDeleteTargets([])}
-        shareTarget={shareTarget}
-        onShareClose={handleShareClose}
-        onShareToContact={handleShareToContact}
-        onSearchContacts={handleSearchContacts}
-        onGetRecentChats={handleGetRecentChats}
         uploadConfirmDraft={uploadConfirmDraft}
         uploadPremiumUser={uploadPremiumUser}
         setUploadConfirmDraft={setUploadConfirmDraft}
         onConfirmUploadDraft={handleConfirmUploadDraft}
-        isChatDrivePickerOpen={isChatDrivePickerOpen}
-        chatDriveCandidates={chatDriveCandidates}
-        isChatDriveCandidatesLoading={isChatDriveCandidatesLoading}
-        chatDriveCandidatesQuery={chatDriveCandidatesQuery}
-        setChatDriveCandidatesQuery={setChatDriveCandidatesQuery}
-        pendingChatDriveCandidate={pendingChatDriveCandidate}
-        setPendingChatDriveCandidate={setPendingChatDriveCandidate}
-        onCloseChatDrivePicker={() => setIsChatDrivePickerOpen(false)}
-        onConfirmChatDriveCandidate={handleConfirmChatDriveCandidate}
       />
     </div>
   );
