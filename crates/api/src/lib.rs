@@ -3666,6 +3666,8 @@ mod tests {
             role: "user".to_string(),
             telegram_user_id: None,
             telegram_username: None,
+            telegram_first_name: None,
+            telegram_last_name: None,
             permissions: default_permissions(),
             storage_chat_id,
             created_at: chrono::Utc::now(),
