@@ -200,30 +200,10 @@ export function useExplorerControllerTransfers({
     [handleUploadFiles, setUploadConfirmDraft],
   );
 
-  const handleSearchContacts = useCallback(async (query: string) => {
-    try {
-      return await invoke<any[]>("tg_search_contacts", { query });
-    } catch (error) {
-      console.error("Search contacts failed:", error);
-      return [];
-    }
-  }, []);
-
-  const handleGetRecentChats = useCallback(async () => {
-    try {
-      return await invoke<any[]>("tg_get_recent_chats");
-    } catch (error) {
-      console.error("Get recent chats failed:", error);
-      return [];
-    }
-  }, []);
-
   return {
     handleCancelActiveDownload,
     handleCancelUploadQueue,
     handleConfirmUploadDraft,
-    handleGetRecentChats,
-    handleSearchContacts,
     handleToggleTransferMenu,
     handleUploadFiles,
   };

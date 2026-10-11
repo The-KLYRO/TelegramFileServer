@@ -5,11 +5,19 @@ interface InvokeOptions {
   args?: Record<string, unknown>;
 }
 
+const SAVED_ROOT = "/Home";
+
+function authToken(): string | null {
+  return localStorage.getItem("tfs_token");
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const token = authToken();
   const response = await fetch(url, {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init?.headers || {}),
     },
   });
@@ -31,7 +39,11 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     return undefined as T;
   }
 
-  return response.json();
+  const text = await response.text();
+  if (!text) {
+    return undefined as T;
+  }
+  return JSON.parse(text) as T;
 }
 
 function logToServer(level: string, message: string): void {
@@ -40,7 +52,144 @@ function logToServer(level: string, message: string): void {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ level, message }),
   }).catch(() => {
-    // Silently ignore logging failures (endpoint may not exist yet)
+    // Silently ignore logging failures
+  });
+}
+
+/** `tg://saved/X` → `/Home/X`; a `/Home/...` path passes through. */
+function toSavedPath(path: string): string {
+  if (path.startsWith("tg://saved/")) {
+    const rest = path.slice("tg://saved/".length);
+    return rest ? `${SAVED_ROOT}/${rest}` : SAVED_ROOT;
+  }
+  return path;
+}
+
+type ItemRef = { path: string } | { message_id: number };
+
+/** Item paths are `tg://msg/{id}` for files, `/Home/...` (or `tg://saved/…`) for folders. */
+function toItemRef(path: string): ItemRef {
+  const match = /^tg:\/\/msg\/(\d+)$/.exec(path);
+  if (match) {
+    return { message_id: Number(match[1]) };
+  }
+  return { path: toSavedPath(path) };
+}
+
+function messageIdFromPath(path: string): number {
+  const match = /^tg:\/\/msg\/(\d+)$/.exec(path);
+  if (!match) {
+    throw new Error(`unsupported media path: ${path}`);
+  }
+  return Number(match[1]);
+}
+
+/** Streaming/preview URL for `/api/fs/media`, token in the query for `<video>`/`<img>`. */
+function mediaUrl(messageId: number, inline: boolean): string {
+  const base = `/api/fs/media?message_id=${messageId}&inline=${inline ? "1" : "0"}`;
+  const token = authToken();
+  return token ? `${base}&token=${encodeURIComponent(token)}` : base;
+}
+
+/** Client-originated events ride the same `listen()` bus as SSE, via CustomEvent. */
+function emitLocalEvent(event: string, payload: unknown): void {
+  window.dispatchEvent(new CustomEvent(event, { detail: payload }));
+}
+
+/** `tg_upload_file_to_saved_messages` → multipart POST + progress/indexed events. */
+function uploadToSavedMessages(args: Record<string, unknown>): Promise<unknown> {
+  const payload = (args?.args ?? args) as Record<string, unknown>;
+  const uploadId = String(payload.uploadId ?? "");
+  const fileName = String(payload.fileName ?? "upload.bin");
+  const destination = toSavedPath(String(payload.filePath ?? SAVED_ROOT));
+  const bytes = payload.fileBytes;
+
+  if (!Array.isArray(bytes)) {
+    return Promise.reject(
+      new Error("upload: only in-browser file uploads are supported"),
+    );
+  }
+
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.append("path", destination);
+    form.append("file", new Blob([new Uint8Array(bytes as number[])]), fileName);
+
+    const token = authToken();
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/files/upload");
+    if (token) {
+      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    }
+
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      emitLocalEvent("tg-upload-progress", {
+        uploadId,
+        stage: "uploading",
+        progress: (event.loaded / event.total) * 100,
+        uploadedBytes: event.loaded,
+        totalBytes: event.total,
+      });
+    };
+
+    xhr.onload = () => {
+      if (xhr.status < 200 || xhr.status >= 300) {
+        let message = `HTTP ${xhr.status}`;
+        try {
+          const data = JSON.parse(xhr.responseText);
+          if (data && typeof data.error === "string") {
+            message = data.error;
+          }
+        } catch {
+          // ignore JSON parse errors
+        }
+        emitLocalEvent("tg-upload-progress", {
+          uploadId,
+          stage: "failed",
+          progress: 0,
+          message,
+        });
+        reject(new Error(message));
+        return;
+      }
+
+      let summary: { message_id?: number } | null = null;
+      try {
+        summary = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+      } catch {
+        // ignore JSON parse errors
+      }
+      emitLocalEvent("tg-upload-progress", {
+        uploadId,
+        stage: "completed",
+        progress: 100,
+      });
+      emitLocalEvent("tg-upload-indexed", {
+        uploadId,
+        messageId: typeof summary?.message_id === "number" ? summary.message_id : 0,
+        filePath: destination,
+      });
+      resolve(summary);
+    };
+
+    xhr.onerror = () => {
+      const message = "network error during upload";
+      emitLocalEvent("tg-upload-progress", {
+        uploadId,
+        stage: "failed",
+        progress: 0,
+        message,
+      });
+      reject(new Error(message));
+    };
+
+    emitLocalEvent("tg-upload-progress", {
+      uploadId,
+      stage: "preparing",
+      progress: 0,
+    });
+    xhr.send(form);
   });
 }
 
@@ -115,9 +264,7 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
       const token = localStorage.getItem("tfs_token");
       if (!token) return null as T;
       try {
-        return await fetchJson<T>("/api/auth/me", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        return await fetchJson<T>("/api/auth/me");
       } catch {
         return null as T;
       }
@@ -130,6 +277,12 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
       } catch {
         // ignore network errors
       }
+      return undefined as T;
+    }
+
+    case "db_update_session_user_info": {
+      // The server derives identity from Telegram at claim time; there is
+      // nothing to cache-update.
       return undefined as T;
     }
 
@@ -149,6 +302,238 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
 
     case "tg_get_auth_state": {
       return await fetchJson<T>("/api/session/auth");
+    }
+
+    case "tg_list_saved_items_page": {
+      const path = toSavedPath(String(args?.filePath ?? SAVED_ROOT));
+      const offset = Number(args?.offset ?? 0);
+      const limit = Number(args?.limit ?? 0);
+      const query = new URLSearchParams({ path, offset: String(offset) });
+      if (limit > 0) {
+        query.set("limit", String(limit));
+      }
+      return await fetchJson<T>(`/api/fs/items?${query.toString()}`);
+    }
+
+    case "tg_list_saved_items": {
+      const path = toSavedPath(String(args?.filePath ?? SAVED_ROOT));
+      const page = await fetchJson<{ items: unknown[] }>(
+        `/api/fs/items?path=${encodeURIComponent(path)}`,
+      );
+      return (page.items ?? []) as T;
+    }
+
+    case "tg_get_saved_item_by_message_id": {
+      const nested = (args?.args ?? args) as Record<string, unknown>;
+      const messageId = Number(nested.messageId);
+      if (!Number.isFinite(messageId)) {
+        throw new Error("tg_get_saved_item_by_message_id: missing messageId");
+      }
+      return await fetchJson<T>(`/api/fs/items/by-message/${messageId}`);
+    }
+
+    case "tg_get_indexed_saved_messages": {
+      const category = String(args?.category ?? "");
+      if (!category) {
+        throw new Error("tg_get_indexed_saved_messages: missing category");
+      }
+      return await fetchJson<T>(
+        `/api/fs/gallery?category=${encodeURIComponent(category)}`,
+      );
+    }
+
+    case "tg_create_saved_folder": {
+      await fetchJson("/api/fs/folders", {
+        method: "POST",
+        body: JSON.stringify({
+          parent_path: toSavedPath(String(args?.parentPath ?? SAVED_ROOT)),
+          name: String(args?.folderName ?? ""),
+        }),
+      });
+      return undefined as T;
+    }
+
+    case "tg_rename_saved_item": {
+      await fetchJson("/api/fs/rename", {
+        method: "POST",
+        body: JSON.stringify({
+          source: toItemRef(String(args?.sourcePath ?? "")),
+          new_name: String(args?.newName ?? ""),
+        }),
+      });
+      return undefined as T;
+    }
+
+    case "tg_move_saved_item": {
+      await fetchJson("/api/fs/move", {
+        method: "POST",
+        body: JSON.stringify({
+          source: toItemRef(String(args?.sourcePath ?? "")),
+          destination_path: toSavedPath(String(args?.destinationPath ?? "")),
+        }),
+      });
+      return undefined as T;
+    }
+
+    case "tg_copy_saved_item": {
+      await fetchJson("/api/fs/copy", {
+        method: "POST",
+        body: JSON.stringify({
+          source: toItemRef(String(args?.sourcePath ?? "")),
+          destination_path: toSavedPath(String(args?.destinationPath ?? "")),
+        }),
+      });
+      return undefined as T;
+    }
+
+    case "tg_move_saved_item_to_recycle_bin": {
+      await fetchJson("/api/fs/recycle", {
+        method: "POST",
+        body: JSON.stringify({ source: toItemRef(String(args?.sourcePath ?? "")) }),
+      });
+      return undefined as T;
+    }
+
+    case "tg_restore_saved_item": {
+      await fetchJson("/api/fs/restore", {
+        method: "POST",
+        body: JSON.stringify({ source: toItemRef(String(args?.sourcePath ?? "")) }),
+      });
+      return undefined as T;
+    }
+
+    case "tg_delete_saved_item_permanently": {
+      await fetchJson("/api/fs/delete", {
+        method: "POST",
+        body: JSON.stringify({
+          items: [toItemRef(String(args?.sourcePath ?? ""))],
+          permanent: true,
+        }),
+      });
+      return undefined as T;
+    }
+
+    case "tg_delete_saved_items_permanently": {
+      const nested = (args?.args ?? args) as Record<string, unknown>;
+      const sourcePaths = Array.isArray(nested.sourcePaths)
+        ? (nested.sourcePaths as unknown[]).map((p) => toItemRef(String(p)))
+        : [];
+      await fetchJson("/api/fs/delete", {
+        method: "POST",
+        body: JSON.stringify({ items: sourcePaths, permanent: true }),
+      });
+      return undefined as T;
+    }
+
+    case "tg_get_message_thumbnail": {
+      // Telegram thumbnail bytes need a message-context client method the
+      // server does not expose; callers fall back to inline previews.
+      return null as T;
+    }
+
+    case "tg_prepare_saved_media_stream":
+    case "tg_prepare_saved_media_preview": {
+      const messageId = messageIdFromPath(String(args?.sourcePath ?? ""));
+      return mediaUrl(messageId, true) as T;
+    }
+
+    case "tg_download_saved_file": {
+      const messageId = messageIdFromPath(String(args?.sourcePath ?? ""));
+      const anchor = document.createElement("a");
+      anchor.href = mediaUrl(messageId, false);
+      anchor.rel = "noopener";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      return null as T;
+    }
+
+    case "tg_cancel_saved_file_download":
+    case "tg_cancel_saved_file_upload": {
+      // Browser transfers are not server-tracked; nothing to cancel.
+      return false as T;
+    }
+
+    case "tg_upload_file_to_saved_messages": {
+      return (await uploadToSavedMessages(args ?? {})) as T;
+    }
+
+    case "tg_send_saved_note_message":
+    case "tg_edit_saved_note_message": {
+      throw new Error("Notes are not supported by the server yet");
+    }
+
+    case "tg_forward_message": {
+      throw new Error("Forwarding is not supported by the server yet");
+    }
+
+    case "tg_index_saved_messages":
+    case "tg_index_chat_drive":
+    case "tg_start_real_time_sync":
+    case "tg_cloud_sync_skybox_json_to_saved_messages": {
+      // Indexing/sync flows live server-side in Mongo; nothing for the
+      // client to trigger.
+      return undefined as T;
+    }
+
+    case "tg_restore_session": {
+      // The server owns the Telegram session; restoring it in-browser is a
+      // Tauri-era concept.
+      return { authorized: false } as T;
+    }
+
+    case "tg_is_premium_user": {
+      return false as T;
+    }
+
+    case "tg_get_my_profile_photo": {
+      return null as T;
+    }
+
+    case "tg_search_contacts":
+    case "tg_get_recent_chats":
+    case "tg_list_group_channel_chats": {
+      return [] as T;
+    }
+
+    case "tg_list_chat_drive_items_page": {
+      throw new Error("Chat drive is not available in the web app");
+    }
+
+    case "folder_settings_bootstrap_many": {
+      return [] as T;
+    }
+
+    case "folder_settings_save":
+    case "folder_settings_reset": {
+      throw new Error("Folder settings are not supported by the server yet");
+    }
+
+    case "fs_open_path":
+    case "fs_list_dir":
+    case "fs_create_dir":
+    case "fs_delete":
+    case "rename_file":
+    case "copy_file":
+    case "move_file": {
+      // Local-filesystem commands belong to the Tauri build; the explorer
+      // routes everything through the Mongo VFS instead.
+      throw new Error("Local filesystem access is not available in the web app");
+    }
+
+    case "tg_feedback_resolve_destination": {
+      return {
+        available: false,
+        reason: "Feedback is not configured on this server.",
+      } as T;
+    }
+
+    case "tg_feedback_send": {
+      return {
+        ok: false,
+        reason: "Feedback is not configured on this server.",
+        errorKind: null,
+      } as T;
     }
 
     case "log_debug": {
@@ -181,8 +566,13 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
       return false as T;
     }
 
+    case "app_show_os_notification": {
+      // Browser notifications are opt-in per origin; not wired yet.
+      return undefined as T;
+    }
+
     case "tg_get_tdlib_version": {
-      return "Not used" as T;
+      return "" as T;
     }
 
     default: {
@@ -193,6 +583,6 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
 }
 
 export function convertFileSrc(path: string): string {
-  // v1: return path unchanged; TODO: implement thumbnails endpoint
+  // v1: return path unchanged; thumbnails resolve through /api/fs/media.
   return path;
 }

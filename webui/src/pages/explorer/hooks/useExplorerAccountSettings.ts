@@ -43,9 +43,6 @@ type Args = {
   parseSettingBool: (value: string | null, defaultValue: boolean) => boolean;
 };
 
-const PROFILE_PHOTO_REFRESH_ATTEMPTS = 12;
-const PROFILE_PHOTO_REFRESH_INTERVAL_MS = 1000;
-
 export function useExplorerAccountSettings({
   isOfflineRef,
   sessionDataRef,
@@ -77,7 +74,6 @@ export function useExplorerAccountSettings({
   const [isViewModeLoaded, setIsViewModeLoaded] = useState(
     () => sessionState.hasHydratedExplorer,
   );
-  const profilePhotoRefreshSessionRef = useRef(0);
 
   const applyViewMode = useCallback(
     (value: "list" | "grid" | ((prev: "list" | "grid") => "list" | "grid")) => {
@@ -186,56 +182,6 @@ export function useExplorerAccountSettings({
     setPhoneNumber,
     setUserInfo,
   ]);
-
-  const loadProfilePhoto = useCallback(
-    async (cachedPhoto?: string | null) => {
-      const refreshSession = profilePhotoRefreshSessionRef.current + 1;
-      profilePhotoRefreshSessionRef.current = refreshSession;
-
-      let latestPhoto = cachedPhoto?.trim() || null;
-      if (latestPhoto) {
-        setAvatarUrl(latestPhoto);
-      }
-
-      for (
-        let attempt = 0;
-        attempt < PROFILE_PHOTO_REFRESH_ATTEMPTS;
-        attempt += 1
-      ) {
-        try {
-          const photoUrl: string | null = await invoke(
-            "tg_get_my_profile_photo",
-          );
-          const nextPhoto = photoUrl?.trim() || null;
-
-          if (profilePhotoRefreshSessionRef.current !== refreshSession) {
-            return;
-          }
-
-          if (nextPhoto && nextPhoto !== latestPhoto) {
-            latestPhoto = nextPhoto;
-            setAvatarUrl(nextPhoto);
-          }
-        } catch (error) {
-          if (profilePhotoRefreshSessionRef.current !== refreshSession) {
-            return;
-          }
-          console.error("Error loading profile photo:", error);
-        }
-
-        if (attempt < PROFILE_PHOTO_REFRESH_ATTEMPTS - 1) {
-          await new Promise((resolve) => {
-            window.setTimeout(resolve, PROFILE_PHOTO_REFRESH_INTERVAL_MS);
-          });
-
-          if (profilePhotoRefreshSessionRef.current !== refreshSession) {
-            return;
-          }
-        }
-      }
-    },
-    [setAvatarUrl],
-  );
 
   useEffect(() => {
     if (!uploadConfirmDraft || uploadPremiumUser !== null) {
@@ -369,7 +315,6 @@ export function useExplorerAccountSettings({
   return {
     isViewModeLoaded,
     loadFavorites,
-    loadProfilePhoto,
     loadUserInfo,
     refreshRecentPaths,
     setViewMode: applyViewMode,

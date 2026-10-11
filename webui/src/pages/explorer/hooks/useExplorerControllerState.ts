@@ -49,7 +49,6 @@ export function useExplorerControllerState() {
     () => sessionState.favorites,
   );
   const [deleteTargets, setDeleteTargets] = useState<FileItem[]>([]);
-  const [shareTarget, setShareTarget] = useState<FileItem | null>(null);
   const [isNewFolderDialogOpen, setIsNewFolderDialogOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [folderSettingsTarget, setFolderSettingsTarget] =
@@ -236,13 +235,11 @@ export function useExplorerControllerState() {
     setSelectionBox,
     setSortDirection,
     setSortField,
-    setShareTarget,
     setShowDetails,
     setShowFavorites,
     setUploadConfirmDraft,
     setUploadPremiumUser,
     setUserInfo,
-    shareTarget,
     showDetails,
     showFavorites,
     showFavoritesRef,

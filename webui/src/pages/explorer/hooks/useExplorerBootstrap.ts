@@ -37,7 +37,6 @@ type UseExplorerBootstrapArgs = {
   loadFavorites: () => Promise<void>;
   setFavorites: (value: string[]) => void;
   setUserInfo: (value: UserInfo) => void;
-  loadProfilePhoto: (cachedPhoto?: string | null) => Promise<void> | void;
   loadUserInfo: () => Promise<void>;
 };
 
@@ -60,7 +59,6 @@ export function useExplorerBootstrap({
   loadFavorites,
   setFavorites,
   setUserInfo,
-  loadProfilePhoto,
   loadUserInfo,
 }: UseExplorerBootstrapArgs) {
   const sessionState = getExplorerSessionState();
@@ -166,11 +164,8 @@ export function useExplorerBootstrap({
         : undefined;
     if (passedUserInfo) {
       setUserInfo(passedUserInfo);
-      void loadProfilePhoto(passedUserInfo.profile_photo);
     } else {
-      void loadUserInfo().then(() => {
-        void loadProfilePhoto();
-      });
+      void loadUserInfo();
     }
 
     return () => {
