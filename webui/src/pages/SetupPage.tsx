@@ -209,7 +209,7 @@ export default function SetupPage() {
     setBusy("check");
     try {
       const result = await setupCheck(mongoUri.trim(), password);
-      if (result.ok) {
+      if (result.ok === true) {
         if (result.data.configured === true) {
           navigate("/", { replace: true });
         } else {
@@ -247,7 +247,7 @@ export default function SetupPage() {
         owner_id: ownerIdNum,
         default_chat_id: chatIdNum,
       });
-      if (result.ok) {
+      if (result.ok === true) {
         if (result.data.ok === true) {
           // Config saved → the server is ready; LoadingPage re-checks resume
           // and routes into the app.

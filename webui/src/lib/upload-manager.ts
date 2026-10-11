@@ -642,9 +642,12 @@ export class UploadManager {
       this.emit();
 
       // This command is expected to return quickly; progress + completion are event-driven.
-      const result = await invoke<any>("tg_upload_file_to_saved_messages", {
-        args: uploadArgs,
-      });
+      const result = await invoke<{ message_id?: number } | null>(
+        "tg_upload_file_to_saved_messages",
+        {
+          args: uploadArgs,
+        },
+      );
       if (result && typeof result.message_id === "number") {
         task.messageId = result.message_id;
       }
@@ -655,9 +658,10 @@ export class UploadManager {
 
       await this.waitForTerminal(task.uploadId);
     } catch (err) {
-      const message = (err as any)?.message
-        ? String((err as any).message)
-        : "Upload failed";
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : "Upload failed";
       const kind = this.classifyFailure(message);
       task.message = message;
 
@@ -673,7 +677,6 @@ export class UploadManager {
       }
       this.recomputeProgress();
       this.emit();
-    } finally {
     }
   }
 

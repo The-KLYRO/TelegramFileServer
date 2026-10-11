@@ -236,7 +236,8 @@ export const changePassword = (
 /**
  * True when an error from `/api/auth/me` means "no usable session"
  * (missing/expired token or a deleted account) rather than a transient
- * server failure. Note: `require_session` maps invalid tokens to 400.
+ * server failure. Note: `require_session` now returns 401; 400 is kept
+ * for tolerance with older servers.
  */
 export const isDeadSessionError = (error: unknown): boolean =>
   error instanceof ApiHttpError &&

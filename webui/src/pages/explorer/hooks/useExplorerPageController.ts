@@ -18,7 +18,6 @@ import { listen } from "@tauri-apps/api/event";
 import { resolveThumbnailSrc } from "@/lib/thumbnail-src";
 import { useExplorerBootstrap } from "@/pages/explorer/hooks/useExplorerBootstrap";
 import { useExplorerAccountSettings } from "@/pages/explorer/hooks/useExplorerAccountSettings";
-import { useExplorerChatDrivePicker } from "@/pages/explorer/hooks/useExplorerChatDrivePicker";
 import { useExplorerControllerState } from "@/pages/explorer/hooks/useExplorerControllerState";
 import { useExplorerControllerTransfers } from "@/pages/explorer/hooks/useExplorerControllerTransfers";
 import { useExplorerControllerUi } from "@/pages/explorer/hooks/useExplorerControllerUi";
@@ -48,9 +47,6 @@ import {
   NOTES_VIRTUAL_PATH,
   RECYCLE_BIN_VIRTUAL_PATH,
   SAVED_ITEMS_PAGE_SIZE,
-  STORAGE_KEY_CHAT_DRIVE,
-  STORAGE_KEY_CHAT_DRIVES,
-  type ChatDriveCandidate,
   type ClipboardMode,
   type DbError,
   type DownloadProgressPayload,
@@ -66,7 +62,6 @@ import {
   type SelectionBoxState,
   type SyncSnapshotDto,
   type TelegramAuthResult,
-  type TelegramChatDriveItemsPage,
   type TelegramChatSummaryDto,
   type TelegramError,
   type TelegramIndexSavedMessagesResult,
@@ -76,7 +71,6 @@ import {
   type TgUpdateEventPayload,
   type UserInfo,
   convertFileEntryToFileItem,
-  driveItemToFileItem,
   estimateSyncPercentFromIndexedCount,
   getExplorerTabTitle,
   getParentPath,
@@ -211,13 +205,11 @@ export function useExplorerPageController() {
     setSelectionBox,
     setSortDirection,
     setSortField,
-    setShareTarget,
     setShowDetails,
     setShowFavorites,
     setUploadConfirmDraft,
     setUploadPremiumUser,
     setUserInfo,
-    shareTarget,
     showDetails,
     showFavorites,
     showFavoritesRef,
@@ -300,7 +292,6 @@ export function useExplorerPageController() {
 
   const {
     loadFavorites,
-    loadProfilePhoto,
     loadUserInfo,
     refreshRecentPaths,
     setViewMode,
@@ -328,22 +319,6 @@ export function useExplorerPageController() {
     normalizeHomePathSetting,
     parseRecentsLimitSetting,
     parseSettingBool,
-  });
-
-  const {
-    chatDriveCandidates,
-    chatDriveCandidatesQuery,
-    handleConfirmChatDriveCandidate,
-    isChatDriveCandidatesLoading,
-    isChatDrivePickerOpen,
-    pendingChatDriveCandidate,
-    setChatDriveCandidatesQuery,
-    setIsChatDrivePickerOpen,
-    setPendingChatDriveCandidate,
-  } = useExplorerChatDrivePicker({
-    attemptedChatDriveAutoIndexRef,
-    isOfflineRef,
-    navigateToPath: (path) => navigateToPathRef.current(path),
   });
 
   const {
@@ -818,7 +793,6 @@ export function useExplorerPageController() {
     loadFavorites,
     setFavorites,
     setUserInfo,
-    loadProfilePhoto,
     loadUserInfo,
   });
 
@@ -897,9 +871,6 @@ export function useExplorerPageController() {
     handleRestoreAllFromRecycleBin,
     handleRestoreFromRecycleBin,
     handleSendNoteMessage,
-    handleShare,
-    handleShareClose,
-    handleShareToContact,
     handleStageClipboardItem,
     handleToggleFavorite,
     performRename,
@@ -945,7 +916,6 @@ export function useExplorerPageController() {
     selectedPaths,
     setActiveDownload,
     setActivePaste,
-    setChatDriveCandidatesQuery,
     setClipboardItem,
     setDeleteTargets,
     setFiles,
@@ -963,10 +933,8 @@ export function useExplorerPageController() {
     setSavedItemsOffset,
     setSelectedFile,
     setSelectedPaths,
-    setShareTarget,
     setUploadConfirmDraft,
     setUploadPremiumUser,
-    shareTarget,
     showFavoritesRef,
     trackDownloadSpeedSample,
     uploadManagerRef,
@@ -1021,8 +989,6 @@ export function useExplorerPageController() {
     handleCancelActiveDownload,
     handleCancelUploadQueue,
     handleConfirmUploadDraft,
-    handleGetRecentChats,
-    handleSearchContacts,
     handleToggleTransferMenu,
     handleUploadFiles,
   } = useExplorerControllerTransfers({
@@ -1299,7 +1265,6 @@ export function useExplorerPageController() {
     handleContextDelete,
     handleContextDetails,
     handlePaste,
-    handleShare,
     handleCopyNoteText,
     handleEditNoteMessage,
     handleRestoreAllFromRecycleBin,
@@ -1337,23 +1302,9 @@ export function useExplorerPageController() {
     isMultiDelete,
     deleteTarget,
     handleDelete,
-    shareTarget,
-    handleShareClose,
-    handleShareToContact,
-    handleSearchContacts,
-    handleGetRecentChats,
     uploadConfirmDraft,
     uploadPremiumUser,
     setUploadConfirmDraft,
     handleConfirmUploadDraft,
-    isChatDrivePickerOpen,
-    chatDriveCandidates,
-    isChatDriveCandidatesLoading,
-    chatDriveCandidatesQuery,
-    setChatDriveCandidatesQuery,
-    pendingChatDriveCandidate,
-    setPendingChatDriveCandidate,
-    setIsChatDrivePickerOpen,
-    handleConfirmChatDriveCandidate,
   };
 }
