@@ -114,6 +114,7 @@ pub(crate) struct FileSummary {
     mime_type: String,
     media_type: String,
     owner_id: String,
+    message_id: i32,
     download_path: String,
     watch_path: String,
 }
@@ -127,6 +128,7 @@ impl FileSummary {
             mime_type: doc.mime_type.clone(),
             media_type: doc.media_type.clone(),
             owner_id: doc.owner_id.clone(),
+            message_id: doc.message_id,
             download_path: format!("/dl/{}", encode_path(&doc.file_name)),
             watch_path: format!("/watch/{}", encode_path(&doc.file_name)),
         }
@@ -183,6 +185,19 @@ pub(crate) async fn insert_file(client: &mongodb::Client, doc: &FileDoc) -> Resu
     Ok(())
 }
 
+/// Look a file up by the Telegram message it lives in — the identity the
+/// explorer actually holds (`tg://msg/{id}`), unlike the display name.
+pub(crate) async fn find_file_by_message(
+    client: &mongodb::Client,
+    owner_id: &str,
+    message_id: i32,
+) -> Result<Option<FileDoc>, DbError> {
+    let doc = get_files_collection(client)
+        .find_one(doc! { "owner_id": owner_id, "message_id": message_id })
+        .await?;
+    Ok(doc)
+}
+
 /// Last path segment, tolerant of both separators so a Windows-style paste
 /// still resolves.
 pub(crate) fn basename(path: &str) -> &str {
@@ -203,23 +218,30 @@ pub(crate) fn parent_path(path: &str) -> String {
 /// a bare folder (`/Home/Images`) or a full destination path
 /// (`/Home/Images/a.mp4`).
 pub(crate) fn normalize_folder(raw: &str, file_name: &str) -> String {
+    // The Mongo VFS root is /Home: a pathless upload must land there, not at
+    // a path listing can never reach.
     let raw = raw.trim();
     if raw.is_empty() {
-        return "/".to_string();
+        return "/Home".to_string();
     }
     let folder = if basename(raw) == file_name {
-        parent_path(raw)
+        let parent = parent_path(raw);
+        if parent == "/" {
+            "/Home".to_string()
+        } else {
+            parent
+        }
     } else {
         let joined = raw.replace('\\', "/");
         let trimmed = joined.trim_matches('/');
         if trimmed.is_empty() {
-            "/".to_string()
+            "/Home".to_string()
         } else {
             format!("/{trimmed}")
         }
     };
     if folder.is_empty() {
-        "/".to_string()
+        "/Home".to_string()
     } else {
         folder
     }
@@ -500,7 +522,7 @@ mod tests {
 
     #[test]
     fn folder_accepts_bare_folders_and_full_paths() {
-        assert_eq!(normalize_folder("", "a.mp4"), "/");
+        assert_eq!(normalize_folder("", "a.mp4"), "/Home");
         assert_eq!(normalize_folder("/Home/Images", "a.mp4"), "/Home/Images");
         assert_eq!(normalize_folder("Home/Images", "a.mp4"), "/Home/Images");
         assert_eq!(normalize_folder("/Home/Images/", "a.mp4"), "/Home/Images");
@@ -509,7 +531,7 @@ mod tests {
             normalize_folder("/Home/Images/a.mp4", "a.mp4"),
             "/Home/Images"
         );
-        assert_eq!(normalize_folder("a.mp4", "a.mp4"), "/");
+        assert_eq!(normalize_folder("a.mp4", "a.mp4"), "/Home");
         // A different file in the same paste is not mistaken for a folder.
         assert_eq!(
             normalize_folder("/Home/Images/b.mp4", "a.mp4"),

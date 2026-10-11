@@ -2627,8 +2627,8 @@ async fn watch_file(
     .await
 }
 
-/// Shared body of `/dl` and `/watch`: authorise, resolve the record, check
-/// the message still exists on Telegram, then answer the range request.
+/// Shared body of `/dl` and `/watch`: authorise, resolve the record, then
+/// answer the range request.
 async fn serve_media(
     state: &Arc<AppState>,
     file_name: &str,
@@ -2650,7 +2650,51 @@ async fn serve_media(
     let doc = files::find_file(&client, &user.id, file_name)
         .await?
         .ok_or_else(|| ApiError::NotFound("file not found".to_string()))?;
+    serve_media_doc(state, doc, inline, method, headers).await
+}
 
+/// GET /api/fs/media?message_id=N — the explorer's stream/preview/download
+/// URL: keyed by the Telegram message (`tg://msg/{id}`), which the display
+/// name used by `/dl` and `/watch` cannot disambiguate when two folders hold
+/// files with the same name. `inline=false` switches to a download.
+async fn media_by_message(
+    State(state): State<Arc<AppState>>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<MediaByMessageQuery>,
+) -> ApiResult<Response> {
+    let owner = files::require_media_session(&headers, query.token.as_deref(), &state.sessions)?;
+    let client = state.mongo_client().await?;
+    let user = find_user(&client, &owner)
+        .await?
+        .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
+    if !user.permissions.read {
+        return Err(ApiError::Forbidden(
+            "this account cannot download files".to_string(),
+        ));
+    }
+    let doc = files::find_file_by_message(&client, &user.id, query.message_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("file not found".to_string()))?;
+    serve_media_doc(&state, doc, query.inline.unwrap_or(true), method, &headers).await
+}
+
+#[derive(Debug, Deserialize)]
+struct MediaByMessageQuery {
+    message_id: i32,
+    token: Option<String>,
+    inline: Option<bool>,
+}
+
+/// The range/stream body, shared by the name-keyed and message-keyed media
+/// routes once the record (and the caller's read permission) are settled.
+async fn serve_media_doc(
+    state: &Arc<AppState>,
+    doc: files::FileDoc,
+    inline: bool,
+    method: Method,
+    headers: &HeaderMap,
+) -> ApiResult<Response> {
     // Pin the bot that stored the file: the others may not be able to see
     // that chat at all.
     let pool = state.transfer_pool().await?;
@@ -2819,6 +2863,7 @@ pub fn router(mongo_uri: String) -> Router {
         .route("/api/fs/restore", post(vfs::restore_item))
         .route("/api/fs/delete", post(vfs::delete_items))
         .route("/api/fs/gallery", get(vfs::gallery))
+        .route("/api/fs/media", get(media_by_message))
         // Unknown /api/* paths answer JSON 404 instead of the SPA fallback
         // (which serves index.html 200 and breaks response.json()).
         .route("/api/*rest", any(ui::api_not_found))
