@@ -23,6 +23,10 @@ pub struct ClaimStartEvent {
     pub sender_id: i64,
     /// The sender's public @username, when their profile exposes one.
     pub sender_username: Option<String>,
+    /// The sender's Telegram first name, when their profile exposes one.
+    pub sender_first_name: Option<String>,
+    /// The sender's Telegram last name, when their profile exposes one.
+    pub sender_last_name: Option<String>,
     /// The secret embedded in the deep link.
     pub secret: String,
 }
@@ -148,6 +152,8 @@ impl ClaimBot {
             let event = ClaimStartEvent {
                 sender_id,
                 sender_username: user.username().map(str::to_owned),
+                sender_first_name: user.first_name().map(str::to_owned),
+                sender_last_name: user.last_name().map(str::to_owned),
                 secret: secret.to_string(),
             };
             debug!(sender_id, secret = %event.secret, "claim /start received");

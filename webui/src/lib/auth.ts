@@ -12,6 +12,9 @@ export interface MeResponse {
   permissions: Permissions;
   telegram_username: string | null;
   telegram_user_id: number | null;
+  first_name: string | null;
+  last_name: string | null;
+  has_profile_photo: boolean;
 }
 
 /** GET /api/auth/status payload — registration mode for the login screen. */

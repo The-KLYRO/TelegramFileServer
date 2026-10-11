@@ -13,7 +13,6 @@ import {
   EXPLORER_VIEW_MODE_KEY,
   type Favorite,
   type RecentPath,
-  type TelegramAuthResult,
   type UserInfo,
   isSavedVirtualFilePath,
 } from "@/pages/explorer/shared";
@@ -115,73 +114,32 @@ export function useExplorerAccountSettings({
 
   const loadUserInfo = useCallback(async () => {
     try {
-      const session = await invoke<{
-        id: number;
-        phone: string;
-        session_data?: string;
-        profile_photo?: string;
-        first_name?: string;
-        last_name?: string;
-        username?: string;
-        created_at: string;
-      }>("db_get_session");
-      if (!session) {
+      const { fetchMe, getAuthToken } = await import("@/lib/auth");
+      if (!getAuthToken()) {
         return;
       }
-
-      if (session.first_name || session.last_name || session.username) {
-        setUserInfo({
-          id: 0,
-          username: session.username || null,
-          first_name: session.first_name || null,
-          last_name: session.last_name || null,
-          profile_photo: session.profile_photo || null,
-        });
-
-        if (session.profile_photo) {
-          setAvatarUrl(session.profile_photo);
-        }
-        if (session.phone) {
-          setPhoneNumber(session.phone);
+      const me = await fetchMe();
+      const displayName = me.first_name || me.telegram_username || me.username;
+      setUserInfo({
+        id: me.telegram_user_id ?? 0,
+        username: me.telegram_username || me.username,
+        first_name: me.first_name || null,
+        last_name: me.last_name || null,
+        profile_photo: null,
+      });
+      if (me.has_profile_photo && me.telegram_user_id) {
+        const token = getAuthToken();
+        if (token) {
+          setAvatarUrl(`/api/auth/profile-photo?token=${encodeURIComponent(token)}`);
         }
       }
-
-      sessionDataRef.current = session.session_data ?? null;
-
-      if (session.session_data && !isOfflineRef.current) {
-        hasAttemptedSessionRestoreRef.current = true;
-        const result: TelegramAuthResult = await invoke("tg_restore_session", {
-          sessionData: session.session_data,
-        });
-
-        if (result.authorized && result.user_info) {
-          setUserInfo(result.user_info);
-          if (result.user_info.profile_photo) {
-            setAvatarUrl(result.user_info.profile_photo);
-          }
-
-          if (!session.first_name || !session.last_name || !session.username) {
-            invoke("db_update_session_user_info", {
-              firstName: result.user_info.first_name,
-              lastName: result.user_info.last_name,
-              username: result.user_info.username,
-            }).catch((e) =>
-              console.error("Failed to update user info cache:", e),
-            );
-          }
-        }
-      }
+      // Avoid an unused-variable warning: displayName is reserved for
+      // future toast/debug use; the sidebar derives its own label.
+      void displayName;
     } catch (error) {
       console.error("Error loading user info:", error);
     }
-  }, [
-    hasAttemptedSessionRestoreRef,
-    isOfflineRef,
-    sessionDataRef,
-    setAvatarUrl,
-    setPhoneNumber,
-    setUserInfo,
-  ]);
+  }, [setAvatarUrl, setUserInfo]);
 
   useEffect(() => {
     if (!uploadConfirmDraft || uploadPremiumUser !== null) {

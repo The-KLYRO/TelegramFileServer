@@ -467,7 +467,24 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
       throw new Error("Forwarding is not supported by the server yet");
     }
 
-    case "tg_index_saved_messages":
+    case "tg_index_saved_messages": {
+      // Kick off (or join) the server-side history indexer. The response is
+      // a TelegramIndexSavedMessagesResult; live progress arrives over SSE
+      // as `account_sync_changed` / `tg-update-received`.
+      const { getAuthToken } = await import("@/lib/auth");
+      const token = getAuthToken();
+      const response = await fetch("/api/fs/index", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!response.ok) {
+        throw new Error(`index request failed (HTTP ${response.status})`);
+      }
+      return (await response.json()) as T;
+    }
+
     case "tg_index_chat_drive":
     case "tg_start_real_time_sync":
     case "tg_cloud_sync_skybox_json_to_saved_messages": {
