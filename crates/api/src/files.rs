@@ -47,12 +47,19 @@ pub(crate) struct FileDoc {
     #[serde(default)]
     pub(crate) bot_index: i32,
     pub(crate) created_at: chrono::DateTime<chrono::Utc>,
+    /// Caption from the Telegram message (surfaced in the explorer).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) caption: Option<String>,
+    /// Set while the file sits in the recycle bin: the full path it came
+    /// from, so restore puts it back exactly there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) original_path: Option<String>,
 }
 
 impl FileDoc {
-    const COLLECTION_NAME: &'static str = "v2_files";
+    pub(crate) const COLLECTION_NAME: &'static str = "v2_files";
 
-    fn id_for(owner_id: &str, file_path: &str, file_name: &str) -> String {
+    pub(crate) fn id_for(owner_id: &str, file_path: &str, file_name: &str) -> String {
         format!("{}:{}:{}", owner_id, file_path, file_name)
     }
 
@@ -91,6 +98,8 @@ impl FileDoc {
             dc_id: sent.dc_id,
             bot_index,
             created_at: chrono::Utc::now(),
+            caption: None,
+            original_path: None,
         }
     }
 }

@@ -49,6 +49,7 @@ use tokio::sync::mpsc;
 
 mod files;
 mod ui;
+mod vfs;
 
 /// Validate Step1Input manually (mirrors tfs-config validation)
 fn validate_step1(input: &Step1Input) -> Result<(), String> {
@@ -2804,6 +2805,20 @@ pub fn router(mongo_uri: String) -> Router {
         .route("/api/session/auth", get(ui::session_auth))
         .route("/api/logs", post(ui::logs_ingest))
         .route("/api/events", get(ui::events_sse))
+        // Mongo VFS: folder/file listing and mutations for the explorer.
+        .route("/api/fs/items", get(vfs::list_items))
+        .route(
+            "/api/fs/items/by-message/:message_id",
+            get(vfs::item_by_message),
+        )
+        .route("/api/fs/folders", post(vfs::create_folder))
+        .route("/api/fs/move", post(vfs::move_item))
+        .route("/api/fs/copy", post(vfs::copy_item))
+        .route("/api/fs/rename", post(vfs::rename_item))
+        .route("/api/fs/recycle", post(vfs::recycle_item))
+        .route("/api/fs/restore", post(vfs::restore_item))
+        .route("/api/fs/delete", post(vfs::delete_items))
+        .route("/api/fs/gallery", get(vfs::gallery))
         // Unknown /api/* paths answer JSON 404 instead of the SPA fallback
         // (which serves index.html 200 and breaks response.json()).
         .route("/api/*rest", any(ui::api_not_found))
