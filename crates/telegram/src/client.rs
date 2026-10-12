@@ -12,8 +12,9 @@ use grammers_client::{
 };
 use grammers_session::storages::SqliteSession;
 use grammers_session::updates::UpdatesLike;
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tracing::info;
 
@@ -154,6 +155,10 @@ pub struct GrammersClient {
     updates: Option<mpsc::UnboundedReceiver<UpdatesLike>>,
     /// Bot username learned at sign-in time (bots only; `None` for user sessions).
     bot_username: Option<String>,
+    /// Cache of resolved chat_id → PeerRef carrying the real access_hash.
+    /// Private channels reject ambient authority (access_hash = 0), so we
+    /// resolve once via `Client::resolve_peer` and reuse the result.
+    peer_cache: Mutex<HashMap<i64, grammers_session::types::PeerRef>>,
 }
 
 impl GrammersClient {
@@ -176,6 +181,7 @@ impl GrammersClient {
             quit_handle: None,
             updates: None,
             bot_username: None,
+            peer_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -197,6 +203,7 @@ impl GrammersClient {
             quit_handle: None,
             updates: None,
             bot_username: None,
+            peer_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -360,11 +367,45 @@ impl GrammersClient {
         }
     }
 
-    /// Resolve a chat_id (Bot API dialog ID) to a PeerRef with ambient authority
-    fn resolve_peer(&self, chat_id: i64) -> Result<grammers_session::types::PeerRef> {
+    /// Resolve a chat_id (Bot API dialog ID) to a PeerRef carrying the real
+    /// access_hash.
+    ///
+    /// Ambient authority (access_hash = 0) is accepted by Telegram for users
+    /// and public chats, but **private channels reject it with
+    /// `CHANNEL_INVALID`** — they require the real access_hash. So we ask
+    /// grammers to resolve the peer once (which fetches the access_hash from
+    /// the session/RPC) and cache the result per chat_id. Any configured
+    /// storage chat works; nothing is hard-coded.
+    async fn resolve_peer(&self, chat_id: i64) -> Result<grammers_session::types::PeerRef> {
+        if let Some(peer) = self
+            .peer_cache
+            .lock()
+            .expect("peer cache poisoned")
+            .get(&chat_id)
+            .copied()
+        {
+            return Ok(peer);
+        }
+
         let peer_id = grammers_session::types::PeerId::from_bot_api_dialog_id(chat_id)
             .ok_or_else(|| TelegramError::Config(format!("Invalid chat_id: {}", chat_id)))?;
-        Ok(peer_id.to_ambient_ref())
+
+        let client = self.ensure_connected().await?;
+        let resolved = client.resolve_peer(peer_id.to_ambient_ref()).await?;
+
+        // `to_ref` yields a PeerRef bound to the real access_hash (from the
+        // resolved Peer's auth); fall back to the ambient ref if unavailable.
+        let peer = resolved
+            .to_ref()
+            .await
+            .map_err(|e| TelegramError::Other(format!("resolve peer {chat_id}: {e}")))?
+            .unwrap_or_else(|| peer_id.to_ambient_ref());
+
+        self.peer_cache
+            .lock()
+            .expect("peer cache poisoned")
+            .insert(chat_id, peer);
+        Ok(peer)
     }
 
     /// Find the newest message id in a chat by probing `getMessagesByIDs`
@@ -373,7 +414,7 @@ impl GrammersClient {
     /// empty or inaccessible chat.
     pub async fn latest_message_id(&self, chat_id: i64) -> Result<i32> {
         let client = self.ensure_connected().await?;
-        let peer = self.resolve_peer(chat_id)?;
+        let peer = self.resolve_peer(chat_id).await?;
 
         // Does message 1 exist at all?
         let probe = client.get_messages_by_id(peer, &[1]).await?;
@@ -505,6 +546,7 @@ impl TelegramClient for GrammersClient {
         self.updates = None;
         self.bot_username = None;
         self.connected = false;
+        self.peer_cache.lock().expect("peer cache poisoned").clear();
         Ok(())
     }
 
@@ -521,7 +563,7 @@ impl TelegramClient for GrammersClient {
     ) -> Result<SentMedia> {
         let client = self.ensure_connected().await?;
 
-        let peer = self.resolve_peer(chat_id)?;
+        let peer = self.resolve_peer(chat_id).await?;
 
         let uploaded = self
             .upload_file_with_progress(client, file_path, None)
@@ -566,7 +608,7 @@ impl TelegramClient for GrammersClient {
     async fn get_media(&self, chat_id: i64, message_id: i32) -> Result<Option<SentMedia>> {
         let client = self.ensure_connected().await?;
 
-        let peer = self.resolve_peer(chat_id)?;
+        let peer = self.resolve_peer(chat_id).await?;
 
         let messages = client.get_messages_by_id(peer, &[message_id]).await?;
 
@@ -591,7 +633,7 @@ impl TelegramClient for GrammersClient {
         let client = self.ensure_connected().await?;
 
         // Get message to extract file info
-        let peer = self.resolve_peer(chat_id)?;
+        let peer = self.resolve_peer(chat_id).await?;
         let messages = client.get_messages_by_id(peer, &[message_id]).await?;
         let message =
             messages
@@ -719,7 +761,7 @@ impl TelegramClient for GrammersClient {
     ) -> Result<()> {
         let client = self.ensure_connected().await?;
 
-        let peer = self.resolve_peer(chat_id)?;
+        let peer = self.resolve_peer(chat_id).await?;
         let messages = client.get_messages_by_id(peer, &[message_id]).await?;
         let message =
             messages
@@ -798,7 +840,7 @@ impl TelegramClient for GrammersClient {
             return Ok(vec![]);
         }
         let client = self.ensure_connected().await?;
-        let peer = self.resolve_peer(chat_id)?;
+        let peer = self.resolve_peer(chat_id).await?;
 
         let ids: Vec<i32> = (0..limit as i32)
             .map(|i| offset_id - i)
