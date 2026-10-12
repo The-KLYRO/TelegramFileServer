@@ -24,6 +24,27 @@ pub async fn username_by_id(client: &Client, user_id: i64) -> Result<Option<Stri
     Ok(peer.username().map(str::to_string))
 }
 
+/// Resolve a Telegram user id to `(first_name, last_name, username)`.
+///
+/// Uses ambient authority like [`username_by_id`]. Returns
+/// `(None, None, None)` when the peer is not a user (e.g. a channel id).
+pub async fn names_by_id(
+    client: &Client,
+    user_id: i64,
+) -> Result<(Option<String>, Option<String>, Option<String>)> {
+    let peer_id = PeerId::user(user_id)
+        .ok_or_else(|| TelegramError::Config(format!("invalid Telegram user id: {user_id}")))?;
+    let peer = client.resolve_peer(peer_id.to_ambient_ref()).await?;
+    let grammers_client::peer::Peer::User(user) = peer else {
+        return Ok((None, None, None));
+    };
+    Ok((
+        user.first_name().map(str::to_string),
+        user.last_name().map(str::to_string),
+        user.username().map(str::to_string),
+    ))
+}
+
 /// Resolve `username` (with or without `@`) to a Telegram user id.
 ///
 /// Returns `Ok(None)` when the name is empty, free, unresolvable, or
