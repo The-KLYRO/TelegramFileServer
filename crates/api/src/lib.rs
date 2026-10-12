@@ -921,6 +921,51 @@ async fn auth_login(
     }))
 }
 
+/// Best-effort backfill of a user's Telegram first/last name when the
+/// account predates claim-time name capture. Non-fatal: any Telegram or
+/// Mongo error leaves the stored values untouched.
+async fn backfill_telegram_names(state: &AppState, client: &mongodb::Client, user: &mut UserDoc) {
+    if user.telegram_first_name.is_some() || user.telegram_user_id.is_none() {
+        return;
+    }
+    // Tests (Fixed resolver) must never touch Telegram.
+    if matches!(state.owner_resolver, OwnerResolver::Fixed { .. }) {
+        return;
+    }
+    let Some(tg_id) = user.telegram_user_id else {
+        return;
+    };
+    let Ok((_creds, guard)) = tg_lookup_client(state).await else {
+        return;
+    };
+    let Some(tg) = guard.as_ref().and_then(|c| c.inner()) else {
+        return;
+    };
+    let Ok((first, last, username)) = tg_lookup::names_by_id(tg, tg_id).await else {
+        return;
+    };
+    if first.is_none() && last.is_none() {
+        return;
+    }
+    let mut fields = bson::Document::new();
+    if let Some(name) = &first {
+        fields.insert("telegram_first_name", bson::Bson::from(name.clone()));
+    }
+    if let Some(name) = &last {
+        fields.insert("telegram_last_name", bson::Bson::from(name.clone()));
+    }
+    if let Some(name) = &username {
+        fields.insert("telegram_username", bson::Bson::from(name.clone()));
+    }
+    if update_user_fields(client, &user.id, fields).await.is_ok() {
+        user.telegram_first_name = first;
+        user.telegram_last_name = last;
+        if username.is_some() {
+            user.telegram_username = username;
+        }
+    }
+}
+
 /// GET /api/auth/me — requires Bearer token, returns profile + role,
 /// refreshes sliding TTL.
 async fn auth_me(
@@ -929,9 +974,10 @@ async fn auth_me(
 ) -> ApiResult<Json<MeResponse>> {
     let username = require_session(&headers, &state.sessions)?;
     let client = state.mongo_client().await?;
-    let user = find_user(&client, &username)
+    let mut user = find_user(&client, &username)
         .await?
         .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
+    backfill_telegram_names(&state, &client, &mut user).await;
     Ok(Json(MeResponse {
         username: user.username,
         role: user.role,
