@@ -1,0 +1,83 @@
+github:
+  enabled: true
+  sync:
+    branches:
+      enabled: true
+      historySync:
+        enabled: true
+        strategy: 'merge-timelines'
+        createMergeCommits: true
+        mergeMessage: 'Sync: Merge timeline from {source} to {target} [skip ci]'
+      botBranches:
+        strategy: 'skip'
+    tags:
+      enabled: true
+    releases:
+      enabled: true
+    pullRequests:
+      enabled: true
+      comments:
+        enabled: true
+        attribution:
+          includeAuthor: true
+          includeTimestamp: true
+          includeSourceLink: true
+          format: 'quoted'
+        handleUpdates: true
+        preserveFormatting: true
+        syncReplies: true
+    issues:
+      enabled: true
+      comments:
+        enabled: true
+        attribution:
+          includeAuthor: true
+          includeTimestamp: true
+          includeSourceLink: true
+          format: 'quoted'
+        handleUpdates: true
+        preserveFormatting: true
+        syncReplies: true
+
+gitlab:
+  enabled: true
+  host: gitlab.com
+  projectId: 87480394
+  sync:
+    branches:
+      enabled: true
+      historySync:
+        enabled: true
+        strategy: 'merge-timelines'
+        createMergeCommits: true
+        mergeMessage: 'Sync: Merge timeline from {source} to {target} [skip ci]'
+      botBranches:
+        strategy: 'skip'
+    tags:
+      enabled: true
+    releases:
+      enabled: true
+    pullRequests:
+      enabled: true
+      comments:
+        enabled: true
+        attribution:
+          includeAuthor: true
+          includeTimestamp: true
+          includeSourceLink: true
+          format: 'quoted'
+        handleUpdates: true
+        preserveFormatting: true
+        syncReplies: true
+    issues:
+      enabled: true
+      comments:
+        enabled: true
+        attribution:
+          includeAuthor: true
+          includeTimestamp: true
+          includeSourceLink: true
+          format: 'quoted'
+        handleUpdates: true
+        preserveFormatting: true
+        syncReplies: true
