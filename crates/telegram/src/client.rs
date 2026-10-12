@@ -117,9 +117,11 @@ pub trait TelegramClient: Send + Sync {
     /// List a page of message history from a chat, newest first.
     ///
     /// Only messages that carry media (photo/document) are returned, each
-    /// paired with its caption text (if any). `offset_id` is exclusive: pass
-    /// 0 for the newest page, then the smallest id seen so far to walk
-    /// older messages.
+    /// paired with its caption text (if any). `offset_id` is an EXCLUSIVE
+    /// upper bound: pass the latest message id + 1 to get the newest page,
+    /// then subtract the page size each iteration to walk older messages.
+    /// Implemented via `messages.getMessagesByIDs` because bots cannot call
+    /// `messages.getHistory` (BOT_METHOD_INVALID).
     async fn list_history(
         &self,
         chat_id: i64,
@@ -363,6 +365,52 @@ impl GrammersClient {
         let peer_id = grammers_session::types::PeerId::from_bot_api_dialog_id(chat_id)
             .ok_or_else(|| TelegramError::Config(format!("Invalid chat_id: {}", chat_id)))?;
         Ok(peer_id.to_ambient_ref())
+    }
+
+    /// Find the newest message id in a chat by probing `getMessagesByIDs`
+    /// (bots cannot call `messages.getHistory`). Uses exponential search for
+    /// an upper bound, then binary search for the boundary. Returns 0 for an
+    /// empty or inaccessible chat.
+    pub async fn latest_message_id(&self, chat_id: i64) -> Result<i32> {
+        let client = self.ensure_connected().await?;
+        let peer = self.resolve_peer(chat_id)?;
+
+        // Does message 1 exist at all?
+        let probe = client.get_messages_by_id(peer, &[1]).await?;
+        if probe.first().and_then(|m| m.as_ref()).is_none() {
+            return Ok(0);
+        }
+
+        // Exponential search for an upper bound that does not exist.
+        let mut lo: i64 = 1;
+        let mut hi: i64 = 2;
+        loop {
+            if hi > i64::from(i32::MAX) {
+                hi = i64::from(i32::MAX);
+            }
+            let probe = client.get_messages_by_id(peer, &[hi as i32]).await?;
+            if probe.first().and_then(|m| m.as_ref()).is_some() {
+                lo = hi;
+                if hi >= i64::from(i32::MAX) {
+                    return Ok(i32::MAX);
+                }
+                hi = (hi * 2).min(i64::from(i32::MAX));
+            } else {
+                break;
+            }
+        }
+
+        // Binary search: lo exists, hi does not.
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2;
+            let probe = client.get_messages_by_id(peer, &[mid as i32]).await?;
+            if probe.first().and_then(|m| m.as_ref()).is_some() {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(lo as i32)
     }
 }
 
@@ -741,16 +789,29 @@ impl TelegramClient for GrammersClient {
         offset_id: i32,
         limit: u32,
     ) -> Result<Vec<(SentMedia, Option<String>)>> {
+        // `offset_id` is an exclusive upper bound: return up to `limit`
+        // media messages with id < offset_id, newest first. Callers must
+        // first learn the latest id via `latest_message_id` — bots cannot
+        // call messages.getHistory (BOT_METHOD_INVALID), so we fetch a
+        // fixed id-range with getMessagesByIDs instead.
+        if offset_id <= 0 || limit == 0 {
+            return Ok(vec![]);
+        }
         let client = self.ensure_connected().await?;
         let peer = self.resolve_peer(chat_id)?;
 
-        let mut iter = client
-            .iter_messages(peer)
-            .limit(limit as usize)
-            .offset_id(offset_id);
+        let ids: Vec<i32> = (0..limit as i32)
+            .map(|i| offset_id - i)
+            .filter(|&id| id > 0)
+            .collect();
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let messages = client.get_messages_by_id(peer, &ids).await?;
 
         let mut out = Vec::new();
-        while let Some(message) = iter.next().await? {
+        for message in messages.into_iter().flatten() {
             if message.media().is_none() {
                 continue;
             }
