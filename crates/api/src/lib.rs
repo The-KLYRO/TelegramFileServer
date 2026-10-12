@@ -2993,28 +2993,44 @@ async fn run_history_index(
         .database(&data_database_name())
         .collection::<files::FileDoc>(files::FileDoc::COLLECTION_NAME);
 
-    let mut offset_id: i32 = 0;
+    // Bots cannot call messages.getHistory (BOT_METHOD_INVALID), so we
+    // learn the newest id by probing getMessagesByIDs, then walk downward
+    // in fixed batches with list_history (also getMessagesByIDs-based).
+    const PAGE: i32 = 100;
+    let mut offset_id: i32 = {
+        let lease = pool
+            .lease()
+            .await
+            .map_err(|e| ApiError::Telegram(e.to_string()))?;
+        let latest = lease
+            .client()
+            .latest_message_id(chat_id)
+            .await
+            .map_err(|e| ApiError::Telegram(format!("could not probe latest message id: {e}")))?;
+        drop(lease);
+        latest.saturating_add(1) // exclusive upper bound for the first page
+    };
+    let latest_id = offset_id - 1;
     let mut total_new: u64 = 0;
     let mut scanned: u64 = 0;
-    const PAGE: u32 = 100;
 
     loop {
+        if offset_id <= 1 {
+            break;
+        }
         let lease = pool
             .lease()
             .await
             .map_err(|e| ApiError::Telegram(e.to_string()))?;
         let client = lease.client();
         let page = client
-            .list_history(chat_id, offset_id, PAGE)
+            .list_history(chat_id, offset_id, PAGE as u32)
             .await
             .map_err(|e| ApiError::Telegram(format!("history listing failed: {e}")))?;
         drop(lease);
 
-        if page.is_empty() {
-            break;
-        }
-
-        // Walk the page oldest→newest so offset_id ends at the smallest id.
+        // Process the page (may be empty when no media exists in this id
+        // range — we still walk downward so no gaps are left).
         let mut page_new: u64 = 0;
         for (sent, caption) in &page {
             scanned += 1;
@@ -3055,16 +3071,20 @@ async fn run_history_index(
             guard.scanned = scanned;
             guard.indexed = total_new;
         }
+        let walked = latest_id.saturating_sub(offset_id).max(0) as u64;
+        let total_span = latest_id.max(1) as u64;
+        let progress_percent = ((walked * 100) / total_span).min(100);
         state.publish_event(
             "account_sync_changed",
-            serde_json::json!({ "state": "Syncing", "indexed_count": total_new }),
+            serde_json::json!({
+                "state": "Syncing",
+                "indexed_count": total_new,
+                "progress_percent": progress_percent,
+            }),
         );
 
-        // Advance offset to the oldest message id seen in this page.
-        match page.iter().map(|(s, _)| s.message_id).min() {
-            Some(min_id) if min_id < offset_id || offset_id == 0 => offset_id = min_id,
-            _ => break,
-        }
+        // Walk downward by one page: the next batch is [offset-PAGE, offset).
+        offset_id -= PAGE;
 
         // Yield briefly so SSE flushes and the HTTP server stays responsive.
         tokio::task::yield_now().await;
