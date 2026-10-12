@@ -921,11 +921,15 @@ async fn auth_login(
     }))
 }
 
-/// Best-effort backfill of a user's Telegram first/last name when the
-/// account predates claim-time name capture. Non-fatal: any Telegram or
-/// Mongo error leaves the stored values untouched.
+/// Best-effort backfill of a user's Telegram first/last name and public
+/// @username when the account predates claim-time capture (or is missing the
+/// username while the names are present). Non-fatal: any Telegram or Mongo
+/// error leaves the stored values untouched.
 async fn backfill_telegram_names(state: &AppState, client: &mongodb::Client, user: &mut UserDoc) {
-    if user.telegram_first_name.is_some() || user.telegram_user_id.is_none() {
+    // Fetch only when the id is known and something is still missing.
+    if user.telegram_user_id.is_none()
+        || (user.telegram_first_name.is_some() && user.telegram_username.is_some())
+    {
         return;
     }
     // Tests (Fixed resolver) must never touch Telegram.
@@ -944,25 +948,35 @@ async fn backfill_telegram_names(state: &AppState, client: &mongodb::Client, use
     let Ok((first, last, username)) = tg_lookup::names_by_id(tg, tg_id).await else {
         return;
     };
-    if first.is_none() && last.is_none() {
-        return;
-    }
+    // Persist only the fields that are missing locally and known remotely, so
+    // we never clobber good data (or write nulls over an existing name).
     let mut fields = bson::Document::new();
-    if let Some(name) = &first {
+    if user.telegram_first_name.is_none()
+        && let Some(name) = &first
+    {
         fields.insert("telegram_first_name", bson::Bson::from(name.clone()));
     }
-    if let Some(name) = &last {
+    if user.telegram_last_name.is_none()
+        && let Some(name) = &last
+    {
         fields.insert("telegram_last_name", bson::Bson::from(name.clone()));
     }
-    if let Some(name) = &username {
+    if user.telegram_username.is_none()
+        && let Some(name) = &username
+    {
         fields.insert("telegram_username", bson::Bson::from(name.clone()));
     }
-    if update_user_fields(client, &user.id, fields).await.is_ok() {
+    if fields.is_empty() || update_user_fields(client, &user.id, fields).await.is_err() {
+        return;
+    }
+    if user.telegram_first_name.is_none() {
         user.telegram_first_name = first;
+    }
+    if user.telegram_last_name.is_none() {
         user.telegram_last_name = last;
-        if username.is_some() {
-            user.telegram_username = username;
-        }
+    }
+    if user.telegram_username.is_none() {
+        user.telegram_username = username;
     }
 }
 
