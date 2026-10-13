@@ -93,6 +93,36 @@ const authHeader = (): Record<string, string> => {
   return token ? { Authorization: `Bearer ${token}` } : {};
 };
 
+/**
+ * Paths where a 401 is *expected* (the login / setup / bootstrap screens hit
+ * auth endpoints that legitimately answer 401) — never bounce the user away
+ * from these.
+ */
+const AUTH_FLOW_PATHS = new Set(["/", "/login", "/setup"]);
+
+let redirectingToLogin = false;
+
+/**
+ * A 401 from any protected endpoint means the stored session is dead (the
+ * backend restarted, the token expired, or the account was removed). Clear it
+ * and send the user to the login screen instead of leaving the app on a blank
+ * page with only console errors. Safe to call from any fetch wrapper.
+ */
+export function handleAuthFailure(): void {
+  if (redirectingToLogin || typeof window === "undefined") {
+    return;
+  }
+  const path = window.location.pathname;
+  if (AUTH_FLOW_PATHS.has(path) || path.startsWith("/login")) {
+    return;
+  }
+  redirectingToLogin = true;
+  clearAuthToken();
+  // Full navigation: the SPA is served at the origin root, so this reloads
+  // straight into the login route (and resets in-memory query state).
+  window.location.assign("/login");
+}
+
 async function toApiError(response: Response): Promise<ApiHttpError> {
   let message = `HTTP ${response.status}`;
   try {
@@ -125,7 +155,11 @@ export async function apiSend(
   };
   const response = await fetch(path, { ...init, headers: merged });
   if (!response.ok) {
-    throw await toApiError(response);
+    const error = await toApiError(response);
+    if (response.status === 401 && !path.startsWith("/api/auth/")) {
+      handleAuthFailure();
+    }
+    throw error;
   }
   return response;
 }
