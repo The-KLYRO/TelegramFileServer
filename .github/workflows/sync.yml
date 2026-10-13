@@ -1,13 +1,16 @@
 name: Sync GitHub <-> GitLab
 
+# NOTE: `issues` and `pull_request` triggers are intentionally omitted.
+# gitsync is bidirectional and itself creates/closes GitHub issues and PRs to
+# mirror GitLab. With those event types enabled, each sync run fired new
+# `issues`/`pull_request` events that re-triggered the workflow — a
+# self-sustaining feedback loop that spawned a run every ~15s. Issue/PR
+# changes now sync on `push`, the 6-hour schedule, and manual dispatch, which
+# breaks the loop while preserving bidirectional sync.
 on:
   push:
     branches: ['**']
     tags: ['*']
-  pull_request:
-    types: [opened, closed, reopened]
-  issues:
-    types: [opened, closed, reopened]
   release:
     types: [published]
   schedule:
