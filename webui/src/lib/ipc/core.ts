@@ -11,6 +11,27 @@ function authToken(): string | null {
   return localStorage.getItem("tfs_token");
 }
 
+const AUTH_FLOW_PATHS = new Set(["/", "/login", "/setup"]);
+let redirectingToLogin = false;
+
+/**
+ * A 401 on a protected endpoint means the session is dead (backend restarted
+ * or token expired). Clear it and land on /login instead of leaving a blank
+ * page with only console errors. Skips auth/setup/bootstrap paths.
+ */
+function handleAuthFailure(): void {
+  if (redirectingToLogin || typeof window === "undefined") {
+    return;
+  }
+  const path = window.location.pathname;
+  if (AUTH_FLOW_PATHS.has(path) || path.startsWith("/login")) {
+    return;
+  }
+  redirectingToLogin = true;
+  localStorage.removeItem("tfs_token");
+  window.location.assign("/login");
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const token = authToken();
   const response = await fetch(url, {
@@ -23,6 +44,9 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
+    if (response.status === 401 && !url.startsWith("/api/auth/")) {
+      handleAuthFailure();
+    }
     let errorMessage = `HTTP ${response.status}`;
     try {
       const errorData = await response.json();

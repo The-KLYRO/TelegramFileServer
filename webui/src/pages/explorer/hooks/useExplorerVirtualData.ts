@@ -293,7 +293,26 @@ export function useExplorerVirtualData({
           "tg_index_saved_messages",
         );
 
-        if (result.total_new_messages > 0) {
+        // The backend now reports the newest readable message id and an
+        // optional notice (e.g. unreadable chat). Surface both so indexing
+        // never fails silently with a blank "0 / false".
+        if (result.notice) {
+          toast({
+            title: "Indexing issue",
+            description: result.notice,
+            variant: "destructive",
+          });
+        } else if (
+          result.latest_message_id === 0 &&
+          result.historical_sync_complete === false
+        ) {
+          toast({
+            title: "No messages found",
+            description:
+              "The bot could not read the storage chat. Make sure it is an admin with Read Messages access, then retry.",
+            variant: "destructive",
+          });
+        } else if (result.total_new_messages > 0) {
           setIsSavedSyncComplete(false);
           toast({
             title: "Saved Messages Synced",
@@ -304,6 +323,12 @@ export function useExplorerVirtualData({
         return result;
       } catch (error) {
         console.error("Error indexing saved messages:", error);
+        toast({
+          title: "Indexing failed",
+          description:
+            error instanceof Error ? error.message : String(error),
+          variant: "destructive",
+        });
         return null;
       }
     }, []);
