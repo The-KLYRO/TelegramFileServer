@@ -141,6 +141,10 @@ export interface TelegramIndexSavedMessagesResult {
   historical_sync_complete?: boolean;
   indexed_count?: number;
   last_error?: string | null;
+  /** Newest message id the backend could read (0 = chat empty/unreadable). */
+  latest_message_id?: number;
+  /** Human-readable reason indexing could not proceed, if any. */
+  notice?: string | null;
 }
 
 export type SyncStateDto =
