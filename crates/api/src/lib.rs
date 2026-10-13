@@ -2663,7 +2663,7 @@ async fn files_upload(
         .map_err(|e| ApiError::Telegram(e.to_string()))?;
     let bot_index = lease.index() as i32;
     let engine = TransferEngine::with_default_config(lease.client());
-    let sent = engine
+    let mut sent = engine
         .upload_file(
             chat_id,
             &staged.path,
@@ -2675,6 +2675,12 @@ async fn files_upload(
         .await
         .map_err(|e| ApiError::Telegram(format!("upload failed: {e}")))?;
     drop(lease);
+
+    // Uploads are sent as documents (exact bytes, no Telegram re-encode), so
+    // the message comes back typed as `Document`. Restore the extension-based
+    // classification so images/videos/audio keep their folder + gallery
+    // routing even though the transport is a document.
+    sent.media_type = media_type;
 
     let doc = files::FileDoc::new(
         &user.id,
@@ -2890,6 +2896,12 @@ struct IndexStartResponse {
     saved_messages_chat_id: i64,
     historical_sync_complete: bool,
     indexed_count: u64,
+    /// Newest message id probed in the storage chat (0 when the chat looks
+    /// empty or is unreadable). Lets the UI show real progress instead of a
+    /// blank "0 / false" that reads like a silent failure.
+    latest_message_id: i32,
+    /// Set when the chat could not be indexed (e.g. the bot lacks read access).
+    notice: Option<String>,
 }
 
 /// POST /api/fs/index — start (or join) a background history-index task.
@@ -2931,12 +2943,59 @@ async fn fs_index(
                 saved_messages_chat_id: chat_id,
                 historical_sync_complete: false,
                 indexed_count: indexed,
+                latest_message_id: 0,
+                notice: Some("an index run is already in progress".to_string()),
             }));
         }
         state_guard.running = true;
         state_guard.scanned = 0;
         state_guard.indexed = 0;
         state_guard.last_error = None;
+    }
+
+    // Probe the newest message id up front so failures surface here (a clear
+    // synchronous error) instead of dying silently in the background task.
+    // A value of 0 means the chat looks empty *or* the bot cannot read it.
+    let latest_id = {
+        let pool = state
+            .transfer_pool()
+            .await
+            .map_err(|e| ApiError::Telegram(e.to_string()))?;
+        let lease = pool
+            .lease()
+            .await
+            .map_err(|e| ApiError::Telegram(e.to_string()))?;
+        let probed = lease
+            .client()
+            .latest_message_id(chat_id)
+            .await
+            .map_err(|e| ApiError::Telegram(format!("could not read storage chat: {e}")))?;
+        drop(lease);
+        probed
+    };
+
+    if latest_id == 0 {
+        // Nothing readable. Release the running flag and tell the caller why
+        // rather than spawning a task that would index nothing.
+        {
+            let mut state_guard = state.indexer.lock().await;
+            state_guard.running = false;
+        }
+        let notice = format!(
+            "no readable messages in chat {chat_id}. Ensure the bot is an \
+             ADMIN of that chat with the \"Read Messages\" permission, then \
+             re-run indexing."
+        );
+        tracing::warn!(chat_id, "history index aborted: {notice}");
+        return Ok(Json(IndexStartResponse {
+            total_new_messages: 0,
+            started_from_empty_db: started_from_empty,
+            saved_messages_chat_id: chat_id,
+            historical_sync_complete: false,
+            indexed_count: 0,
+            latest_message_id: 0,
+            notice: Some(notice),
+        }));
     }
 
     // Publish the initial "Syncing" snapshot so the toolbar reacts immediately.
@@ -2951,7 +3010,8 @@ async fn fs_index(
     let user_id = user.id.clone();
     let owner_username = user.username.clone();
     tokio::spawn(async move {
-        let result = run_history_index(&state_clone, &mongo_clone, &user_id, chat_id).await;
+        let result =
+            run_history_index(&state_clone, &mongo_clone, &user_id, chat_id, latest_id).await;
         let mut guard = state_clone.indexer.lock().await;
         guard.running = false;
         match result {
@@ -2981,6 +3041,8 @@ async fn fs_index(
         saved_messages_chat_id: chat_id,
         historical_sync_complete: false,
         indexed_count: 0,
+        latest_message_id: latest_id,
+        notice: None,
     }))
 }
 
@@ -2995,12 +3057,15 @@ fn folder_for_media(media_type: MediaType) -> &'static str {
 }
 
 /// Core indexing loop: page history newest→oldest, upsert FileDocs, publish
-/// progress. Returns the number of newly-inserted documents.
+/// progress. Returns the number of newly-inserted documents. `latest_id` is
+/// the pre-probed newest message id (must be > 0; callers abort earlier when
+/// the chat is unreadable/empty).
 async fn run_history_index(
     state: &Arc<AppState>,
     mongo: &Client,
     owner_id: &str,
     chat_id: i64,
+    latest_id: i32,
 ) -> Result<u64, ApiError> {
     let pool = state.transfer_pool().await?;
     let files_coll = mongo
@@ -3008,23 +3073,11 @@ async fn run_history_index(
         .collection::<files::FileDoc>(files::FileDoc::COLLECTION_NAME);
 
     // Bots cannot call messages.getHistory (BOT_METHOD_INVALID), so we
-    // learn the newest id by probing getMessagesByIDs, then walk downward
-    // in fixed batches with list_history (also getMessagesByIDs-based).
+    // walk downward from the pre-probed newest id in fixed batches with
+    // list_history (getMessagesByIDs-based).
     const PAGE: i32 = 100;
-    let mut offset_id: i32 = {
-        let lease = pool
-            .lease()
-            .await
-            .map_err(|e| ApiError::Telegram(e.to_string()))?;
-        let latest = lease
-            .client()
-            .latest_message_id(chat_id)
-            .await
-            .map_err(|e| ApiError::Telegram(format!("could not probe latest message id: {e}")))?;
-        drop(lease);
-        latest.saturating_add(1) // exclusive upper bound for the first page
-    };
-    let latest_id = offset_id - 1;
+    let mut offset_id: i32 = latest_id.saturating_add(1); // exclusive upper bound
+    let latest_id = latest_id as i64;
     let mut total_new: u64 = 0;
     let mut scanned: u64 = 0;
 
@@ -3085,7 +3138,7 @@ async fn run_history_index(
             guard.scanned = scanned;
             guard.indexed = total_new;
         }
-        let walked = latest_id.saturating_sub(offset_id).max(0) as u64;
+        let walked = latest_id.saturating_sub(i64::from(offset_id)).max(0) as u64;
         let total_span = latest_id.max(1) as u64;
         let progress_percent = ((walked * 100) / total_span).min(100);
         state.publish_event(

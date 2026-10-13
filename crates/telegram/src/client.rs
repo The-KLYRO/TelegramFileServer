@@ -355,10 +355,17 @@ impl GrammersClient {
         media_type: MediaType,
     ) -> InputMessage {
         let caption = caption.unwrap_or("");
+        // Send **everything** as a document. Routing images through
+        // `.photo()` makes Telegram re-encode and validate them, which fails
+        // with `PHOTO_EXT_INVALID` for files whose bytes aren't a photo
+        // Telegram accepts — and would lossily recompress genuine photos
+        // anyway. A file server must store the exact original bytes, so we
+        // upload as a document (grammers preserves the filename via
+        // `DocumentAttributeFilename` and infers the mime type) and keep the
+        // image/video/audio classification only for folder + gallery routing.
         match media_type {
-            MediaType::Photo => InputMessage::new().photo(uploaded).text(caption),
-            // Video, Audio, Voice, Animation, Sticker are all sent as documents in grammers 0.10
-            MediaType::Video
+            MediaType::Photo
+            | MediaType::Video
             | MediaType::Audio
             | MediaType::Voice
             | MediaType::Animation
@@ -409,49 +416,64 @@ impl GrammersClient {
     }
 
     /// Find the newest message id in a chat by probing `getMessagesByIDs`
-    /// (bots cannot call `messages.getHistory`). Uses exponential search for
-    /// an upper bound, then binary search for the boundary. Returns 0 for an
-    /// empty or inaccessible chat.
+    /// (bots cannot call `messages.getHistory`). Returns 0 for an empty or
+    /// inaccessible chat.
+    ///
+    /// Gap-tolerant: it does **not** assume message id 1 exists (deleted
+    /// messages and late-joined bots leave gaps, and gating on id 1 used to
+    /// silently report a non-empty chat as empty). Instead it gallops upward
+    /// by powers of two to bracket the newest id, then scans that bracket
+    /// downward in batches to pin the exact maximum.
     pub async fn latest_message_id(&self, chat_id: i64) -> Result<i32> {
         let client = self.ensure_connected().await?;
         let peer = self.resolve_peer(chat_id).await?;
 
-        // Does message 1 exist at all?
-        let probe = client.get_messages_by_id(peer, &[1]).await?;
-        if probe.first().and_then(|m| m.as_ref()).is_none() {
-            return Ok(0);
-        }
-
-        // Exponential search for an upper bound that does not exist.
-        let mut lo: i64 = 1;
-        let mut hi: i64 = 2;
+        // Phase 1: gallop powers of two, tracking the highest id that exists.
+        let mut best: i32 = 0;
+        let mut step: i64 = 1;
         loop {
-            if hi > i64::from(i32::MAX) {
-                hi = i64::from(i32::MAX);
-            }
-            let probe = client.get_messages_by_id(peer, &[hi as i32]).await?;
+            let probe_id = step.min(i64::from(i32::MAX)) as i32;
+            let probe = client.get_messages_by_id(peer, &[probe_id]).await?;
             if probe.first().and_then(|m| m.as_ref()).is_some() {
-                lo = hi;
-                if hi >= i64::from(i32::MAX) {
-                    return Ok(i32::MAX);
-                }
-                hi = (hi * 2).min(i64::from(i32::MAX));
-            } else {
+                best = probe_id;
+            }
+            if step >= i64::from(i32::MAX) {
                 break;
             }
+            step = (step * 2).min(i64::from(i32::MAX));
         }
 
-        // Binary search: lo exists, hi does not.
-        while hi - lo > 1 {
-            let mid = (lo + hi) / 2;
-            let probe = client.get_messages_by_id(peer, &[mid as i32]).await?;
-            if probe.first().and_then(|m| m.as_ref()).is_some() {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
+        if best == 0 {
+            // No power-of-two id exists: the chat is either empty or its first
+            // messages are a gap. Scan the low range in one batch to catch a
+            // channel whose messages start just above the gap.
+            let ids: Vec<i32> = (1..=200).collect();
+            let res = client.get_messages_by_id(peer, &ids).await?;
+            let max = res
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| m.as_ref().is_some())
+                .map(|(i, _)| i as i32 + 1)
+                .max();
+            return Ok(max.unwrap_or(0));
         }
-        Ok(lo as i32)
+
+        // Phase 2: the newest id lies in `(best, min(2 * best, i32::MAX)]`.
+        // Scan that bracket downward in batches (each id checked independently,
+        // so gaps don't stop us) to pin the exact maximum.
+        const BATCH: i32 = 100;
+        let hi = best.saturating_mul(2);
+        let mut id = hi;
+        while id > best {
+            let start = (id - BATCH + 1).max(best + 1);
+            let ids: Vec<i32> = (start..=id).rev().collect();
+            let res = client.get_messages_by_id(peer, &ids).await?;
+            if let Some((idx, _)) = res.iter().enumerate().find(|(_, m)| m.as_ref().is_some()) {
+                return Ok(ids[idx]);
+            }
+            id = start - 1;
+        }
+        Ok(best)
     }
 }
 
