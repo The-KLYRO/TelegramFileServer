@@ -74,7 +74,6 @@ type UseExplorerFileActionsArgs = {
   openSavedAudioPlayer: (file: FileItem) => void;
   openSavedMediaViewer: (file: FileItem) => void;
   queueCloudSync: () => void;
-  refreshRecentPaths: () => Promise<void>;
   renameTarget: FileItem | null;
   renameValue: string;
   requestDeleteTargets: (targets: FileItem[]) => void;
