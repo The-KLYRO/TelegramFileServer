@@ -5357,7 +5357,8 @@ mod tests {
         let headers = bearer(&token);
         let state = State(state);
 
-        // Missing setting: 404, JSON body, and no `error` field.
+        // Missing setting: 200 with a JSON `null` body (not 404 â€” the SPA
+        // treats a missing value as "use the default"), and no `error` field.
         let missing = ui::settings_get(
             state.clone(),
             headers.clone(),
@@ -5365,9 +5366,13 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert_eq!(missing.status(), StatusCode::OK);
         let body = missing.into_body().collect().await.unwrap().to_bytes();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            value.is_null(),
+            "missing setting must be JSON null: {value}"
+        );
         assert!(
             value.get("error").is_none(),
             "missing-setting body must not carry an error key: {value}"
@@ -5479,6 +5484,6 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(other_missing.status(), StatusCode::NOT_FOUND);
+        assert_eq!(other_missing.status(), StatusCode::OK);
     }
 }
