@@ -5,7 +5,12 @@ import {
   type UploadConfirmDraft,
   type UploadDraftEntry,
 } from "@/components/skybox/UploadConfirmWidget";
-import { type TelegramError } from "@/pages/explorer/shared";
+import {
+  type DownloadProgressPayload,
+  type SavedPathCacheEntry,
+  type TelegramError,
+} from "@/pages/explorer/shared";
+import { type UploadManager } from "@/lib/upload-manager";
 
 type Args = {
   activeDownload: {
@@ -23,13 +28,15 @@ type Args = {
   queueCloudSync: () => void;
   requestStructureBackup: () => void;
   resetUploadSpeedTracking: () => void;
-  savedPathCacheRef: React.MutableRefObject<Record<string, any>>;
-  setActiveDownload: React.Dispatch<React.SetStateAction<any>>;
+  savedPathCacheRef: React.MutableRefObject<Record<string, SavedPathCacheEntry>>;
+  setActiveDownload: React.Dispatch<
+    React.SetStateAction<DownloadProgressPayload | null>
+  >;
   setIsTransferMenuOpen: React.Dispatch<React.SetStateAction<boolean>>;
   setUploadConfirmDraft: React.Dispatch<
     React.SetStateAction<UploadConfirmDraft | null>
   >;
-  uploadManagerRef: React.MutableRefObject<any>;
+  uploadManagerRef: React.MutableRefObject<UploadManager | null>;
 };
 
 export function useExplorerControllerTransfers({
@@ -166,7 +173,7 @@ export function useExplorerControllerTransfers({
     if (!activeDownload || !canCancelDownload) {
       return;
     }
-    setActiveDownload((prev: any) => {
+    setActiveDownload((prev: DownloadProgressPayload | null) => {
       if (!prev || prev.sourcePath !== activeDownload.sourcePath) {
         return prev;
       }

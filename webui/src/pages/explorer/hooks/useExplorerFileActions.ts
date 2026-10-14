@@ -8,6 +8,7 @@ import {
   type UploadConfirmDraft,
   type UploadDraftEntry,
 } from "@/components/skybox/UploadConfirmWidget";
+import { type UploadManager } from "@/lib/upload-manager";
 import {
   type ClipboardMode,
   type DbError,
@@ -15,6 +16,8 @@ import {
   type ExplorerClipboardItem,
   type Favorite,
   type FsError,
+  type PasteProgressState,
+  type SavedPathCacheEntry,
   type TelegramError,
   type TelegramMessage,
   getExplorerTabTitle,
@@ -78,13 +81,13 @@ type UseExplorerFileActionsArgs = {
   requestStructureBackup: () => void;
   resetDownloadSpeedTracking: () => void;
   resetUploadSpeedTracking: () => void;
-  savedPathCacheRef: React.MutableRefObject<Record<string, any>>;
+  savedPathCacheRef: React.MutableRefObject<Record<string, SavedPathCacheEntry>>;
   selectedFile: FileItem | null;
   selectedPaths: string[];
   setActiveDownload: React.Dispatch<
     React.SetStateAction<DownloadProgressPayload | null>
   >;
-  setActivePaste: React.Dispatch<React.SetStateAction<any>>;
+  setActivePaste: React.Dispatch<React.SetStateAction<PasteProgressState | null>>;
   setClipboardItem: React.Dispatch<
     React.SetStateAction<ExplorerClipboardItem | null>
   >;
@@ -97,8 +100,20 @@ type UseExplorerFileActionsArgs = {
   setNoteComposerValue: React.Dispatch<React.SetStateAction<string>>;
   setNoteEditTarget: React.Dispatch<React.SetStateAction<FileItem | null>>;
   setNoteEditValue: React.Dispatch<React.SetStateAction<string>>;
-  setPendingMoveConfirm: React.Dispatch<React.SetStateAction<any>>;
-  setPendingRenameConfirm: React.Dispatch<React.SetStateAction<any>>;
+  setPendingMoveConfirm: React.Dispatch<
+    React.SetStateAction<
+      | {
+          title: string;
+          message: string;
+          run: () => Promise<void>;
+          onCancel?: () => void;
+        }
+      | null
+    >
+  >;
+  setPendingRenameConfirm: React.Dispatch<
+    React.SetStateAction<{ file: FileItem; newName: string } | null>
+  >;
   setRenameTarget: React.Dispatch<React.SetStateAction<FileItem | null>>;
   setRenameValue: React.Dispatch<React.SetStateAction<string>>;
   setSavedItemsOffset: React.Dispatch<React.SetStateAction<number>>;
@@ -109,7 +124,7 @@ type UseExplorerFileActionsArgs = {
   >;
   setUploadPremiumUser: React.Dispatch<React.SetStateAction<boolean | null>>;
   showFavoritesRef: React.MutableRefObject<boolean>;
-  uploadManagerRef: React.MutableRefObject<any>;
+  uploadManagerRef: React.MutableRefObject<UploadManager | null>;
   uploadPremiumUser: boolean | null;
   explorerAreaRef: React.MutableRefObject<HTMLDivElement | null>;
   trackDownloadSpeedSample?: (payload: DownloadProgressPayload) => void;
@@ -443,9 +458,9 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
                 firstErrorMessage =
                   typeof error === "object" &&
                   error &&
-                  "message" in (error as any)
-                    ? String((error as any).message)
-                    : "Delete failed";
+                    "message" in (error as { message?: unknown })
+                      ? String((error as { message?: unknown }).message)
+                      : "Delete failed";
               }
             }
           }
@@ -1076,8 +1091,8 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
                   firstErrorMessage =
                     typeof error === "object" &&
                     error &&
-                    "message" in (error as any)
-                      ? String((error as any).message)
+                    "message" in (error as { message?: unknown })
+                      ? String((error as { message?: unknown }).message)
                       : "Copy failed";
               }
             }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Film, Music2, Tv } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { getDefaultFolderSymbol } from "@/components/skybox/folderSymbols";
@@ -332,7 +332,7 @@ export function FolderArtwork({
         <>
           <div
             className={cn("skybox-folder-icon", folderClassName)}
-            style={{ ["--folder-size" as any]: `${size}px` }}
+            style={{ "--folder-size": `${size}px` } as unknown as CSSProperties}
           />
           {SymbolIcon ? <SymbolIcon className={symbolClassName} /> : null}
         </>
