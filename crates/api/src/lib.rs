@@ -2553,19 +2553,23 @@ struct StagedUpload {
     file_name: String,
     path: PathBuf,
     size: u64,
-    _temp: tempfile::NamedTempFile,
+    _temp: tempfile::TempDir,
 }
 
 /// Stream one multipart field into a temp file.
+///
+/// The bytes land at `<tempdir>/<original-file-name>` (extension included)
+/// rather than a random `tfs-upload-*` name: grammers derives the Telegram
+/// `DocumentAttributeFilename` â€” and the mime type â€” from the basename of the
+/// path it uploads, so staging under a random name would strip the extension
+/// and rename the file on Telegram.
 async fn stage_upload(
     file_name: &str,
     field: &mut axum::extract::multipart::Field<'_>,
 ) -> ApiResult<StagedUpload> {
-    let temp = tempfile::Builder::new()
-        .prefix("tfs-upload-")
-        .tempfile()
-        .map_err(|e| ApiError::Internal(format!("could not create a temp file: {e}")))?;
-    let path = temp.path().to_path_buf();
+    let dir = tempfile::tempdir()
+        .map_err(|e| ApiError::Internal(format!("could not create a temp dir: {e}")))?;
+    let path = dir.path().join(file_name);
     let mut out = tokio::fs::File::create(&path)
         .await
         .map_err(|e| ApiError::Internal(format!("could not open a temp file: {e}")))?;
@@ -2590,7 +2594,7 @@ async fn stage_upload(
         file_name: file_name.to_string(),
         path,
         size,
-        _temp: temp,
+        _temp: dir,
     })
 }
 
