@@ -1,4 +1,5 @@
 import {
+  type CSSProperties,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -749,7 +750,7 @@ export function TitleBar() {
                             <span className="relative h-4 w-4 shrink-0">
                               <div
                                 className="skybox-folder-icon"
-                                style={{ ["--folder-size" as any]: "16px" }}
+                                style={{ "--folder-size": "16px" } as unknown as CSSProperties}
                               />
                               {SymbolIcon ? (
                                 <SymbolIcon className="absolute left-1/2 top-[56%] h-[7px] w-[7px] -translate-x-1/2 -translate-y-1/2 text-black/70 mix-blend-multiply" />

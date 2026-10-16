@@ -1,4 +1,4 @@
-import type { ChangeEvent } from "react";
+import type { ChangeEvent, CSSProperties } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   MoreHorizontal,
@@ -1086,7 +1086,7 @@ function UploadTreeRow({
         {node.kind === "folder" ? (
           <div
             className="skybox-folder-icon drop-shadow-[0_6px_10px_rgba(0,0,0,0.30)]"
-            style={{ ["--folder-size" as any]: "20px" }}
+            style={{ "--folder-size": "20px" } as unknown as CSSProperties}
           />
         ) : preview?.url && preview.isImage ? (
           <img

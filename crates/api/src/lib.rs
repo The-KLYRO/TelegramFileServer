@@ -217,6 +217,24 @@ pub fn require_session(headers: &HeaderMap, store: &SessionStore) -> Result<Stri
         .ok_or_else(|| ApiError::Unauthorized("invalid or expired session".to_string()))
 }
 
+/// The user behind a valid session token, or `None` when the token is
+/// missing, expired, or unknown. Callers treat `None` as "not logged in"
+/// and fall back to pre-login behaviour (the owner account + the default
+/// chat) so history indexing can still run before anyone signs in.
+async fn session_user(
+    headers: &HeaderMap,
+    sessions: &SessionStore,
+    mongo: &mongodb::Client,
+) -> Result<Option<UserDoc>, ApiError> {
+    let Some(token) = extract_bearer_token(headers) else {
+        return Ok(None);
+    };
+    let Some(username) = validate_session(sessions, &token) else {
+        return Ok(None);
+    };
+    find_user(mongo, &username).await.map_err(Into::into)
+}
+
 /// Username validation: 3-32 chars, [A-Za-z0-9_.-]
 fn validate_username(username: &str) -> Result<(), String> {
     if username.len() < 3 || username.len() > 32 {
@@ -2553,19 +2571,23 @@ struct StagedUpload {
     file_name: String,
     path: PathBuf,
     size: u64,
-    _temp: tempfile::NamedTempFile,
+    _temp: tempfile::TempDir,
 }
 
 /// Stream one multipart field into a temp file.
+///
+/// The bytes land at `<tempdir>/<original-file-name>` (extension included)
+/// rather than a random `tfs-upload-*` name: grammers derives the Telegram
+/// `DocumentAttributeFilename` — and the mime type — from the basename of the
+/// path it uploads, so staging under a random name would strip the extension
+/// and rename the file on Telegram.
 async fn stage_upload(
     file_name: &str,
     field: &mut axum::extract::multipart::Field<'_>,
 ) -> ApiResult<StagedUpload> {
-    let temp = tempfile::Builder::new()
-        .prefix("tfs-upload-")
-        .tempfile()
-        .map_err(|e| ApiError::Internal(format!("could not create a temp file: {e}")))?;
-    let path = temp.path().to_path_buf();
+    let dir = tempfile::tempdir()
+        .map_err(|e| ApiError::Internal(format!("could not create a temp dir: {e}")))?;
+    let path = dir.path().join(file_name);
     let mut out = tokio::fs::File::create(&path)
         .await
         .map_err(|e| ApiError::Internal(format!("could not open a temp file: {e}")))?;
@@ -2590,7 +2612,7 @@ async fn stage_upload(
         file_name: file_name.to_string(),
         path,
         size,
-        _temp: temp,
+        _temp: dir,
     })
 }
 
@@ -2904,6 +2926,14 @@ struct IndexStartResponse {
     notice: Option<String>,
 }
 
+/// Release the indexer's `running` claim. Called on every synchronous error
+/// path in `fs_index` after the flag is taken, so a failed probe doesn't wedge
+/// the indexer as "already in progress" until the server restarts.
+async fn release_index_running(state: &AppState) {
+    let mut guard = state.indexer.lock().await;
+    guard.running = false;
+}
+
 /// POST /api/fs/index — start (or join) a background history-index task.
 ///
 /// Pages the account's storage chat from newest to oldest, upserting a
@@ -2913,13 +2943,27 @@ async fn fs_index(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> ApiResult<Json<IndexStartResponse>> {
-    let username = require_session(&headers, &state.sessions)?;
     let mongo = state.mongo_client().await?;
-    let user = find_user(&mongo, &username)
-        .await?
-        .ok_or_else(|| ApiError::Forbidden("account no longer exists".to_string()))?;
-
-    let chat_id = storage_chat_for(&user, default_chat_id(&mongo).await?);
+    // The session is optional, and which chat we index depends on it:
+    //
+    // * **Before login** (no / expired token) we index the *default* chat as
+    //   the owner account — a pre-login backfill that needs no session.
+    // * **After login** we index the signed-in user's storage chat, which is
+    //   the chat they *configured* (if any) falling back to the default. A
+    //   configured chat can only be resolved from their session, so it is
+    //   indexed only once they are signed in.
+    let (user, chat_id) = match session_user(&headers, &state.sessions, &mongo).await? {
+        Some(user) => {
+            let chat_id = storage_chat_for(&user, default_chat_id(&mongo).await?);
+            (user, chat_id)
+        }
+        None => {
+            let owner = find_owner(&mongo).await?.ok_or_else(|| {
+                ApiError::Forbidden("no owner account yet — finish the setup wizard".to_string())
+            })?;
+            (owner, default_chat_id(&mongo).await?)
+        }
+    };
 
     // Detect an empty DB so the frontend can show "first-run backfill".
     let files_coll = mongo
@@ -2956,22 +3000,34 @@ async fn fs_index(
     // Probe the newest message id up front so failures surface here (a clear
     // synchronous error) instead of dying silently in the background task.
     // A value of 0 means the chat looks empty *or* the bot cannot read it.
+    // Every error path below releases the `running` flag before returning, or
+    // the indexer would report "already in progress" until the server restarts.
     let latest_id = {
-        let pool = state
-            .transfer_pool()
-            .await
-            .map_err(|e| ApiError::Telegram(e.to_string()))?;
-        let lease = pool
-            .lease()
-            .await
-            .map_err(|e| ApiError::Telegram(e.to_string()))?;
-        let probed = lease
-            .client()
-            .latest_message_id(chat_id)
-            .await
-            .map_err(|e| ApiError::Telegram(format!("could not read storage chat: {e}")))?;
-        drop(lease);
-        probed
+        let probed = async {
+            let pool = state
+                .transfer_pool()
+                .await
+                .map_err(|e| ApiError::Telegram(e.to_string()))?;
+            let lease = pool
+                .lease()
+                .await
+                .map_err(|e| ApiError::Telegram(e.to_string()))?;
+            let probed = lease
+                .client()
+                .latest_message_id(chat_id)
+                .await
+                .map_err(|e| ApiError::Telegram(format!("could not read storage chat: {e}")))?;
+            drop(lease);
+            Ok::<i32, ApiError>(probed)
+        }
+        .await;
+        match probed {
+            Ok(id) => id,
+            Err(e) => {
+                release_index_running(&state).await;
+                return Err(e);
+            }
+        }
     };
 
     if latest_id == 0 {
@@ -5357,7 +5413,8 @@ mod tests {
         let headers = bearer(&token);
         let state = State(state);
 
-        // Missing setting: 404, JSON body, and no `error` field.
+        // Missing setting: 200 with a JSON `null` body (not 404 — the SPA
+        // treats a missing value as "use the default"), and no `error` field.
         let missing = ui::settings_get(
             state.clone(),
             headers.clone(),
@@ -5365,9 +5422,13 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert_eq!(missing.status(), StatusCode::OK);
         let body = missing.into_body().collect().await.unwrap().to_bytes();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            value.is_null(),
+            "missing setting must be JSON null: {value}"
+        );
         assert!(
             value.get("error").is_none(),
             "missing-setting body must not carry an error key: {value}"
@@ -5479,6 +5540,6 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(other_missing.status(), StatusCode::NOT_FOUND);
+        assert_eq!(other_missing.status(), StatusCode::OK);
     }
 }

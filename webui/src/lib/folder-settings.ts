@@ -133,7 +133,7 @@ function normalizeFolderName(folderName: string): string {
     .trim()
     .toLowerCase()
     .replace(/[._-]+/g, " ")
-    .replace(/[()\[\]{}!?,:;]+/g, " ")
+    .replace(/[()[\]{}!?,:;]+/g, " ")
     .replace(/\s+/g, " ");
 }
 

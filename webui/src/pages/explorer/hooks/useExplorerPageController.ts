@@ -944,7 +944,7 @@ export function useExplorerPageController() {
     hasMoreSavedItems,
     isSavedSyncComplete,
     newFolderName,
-  } as any);
+  });
   handleFileOpenRef.current = handleFileOpen;
 
   const handleLogout = async () => {
