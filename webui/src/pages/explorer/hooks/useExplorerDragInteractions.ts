@@ -7,6 +7,8 @@ import {
 } from "@/components/skybox/UploadConfirmWidget";
 import { toast } from "@/hooks/use-toast";
 import {
+  type SavedPathCacheEntry,
+  type SelectionBoxState,
   INTERNAL_DRAG_MIME,
   INTERNAL_DRAG_MIME_LIST,
   isGalleryPath,
@@ -20,6 +22,8 @@ import {
   joinPath,
   normalizePath,
 } from "@/pages/explorer/shared";
+
+type WebkitEntryHost = { webkitGetAsEntry?: () => FileSystemEntry | null };
 
 type Args = {
   closeContextMenu: () => void;
@@ -40,7 +44,9 @@ type Args = {
   >;
   queueCloudSync: () => void;
   requestStructureBackup: () => void;
-  savedPathCacheRef: React.MutableRefObject<Record<string, any>>;
+  savedPathCacheRef: React.MutableRefObject<
+    Record<string, SavedPathCacheEntry>
+  >;
   selectedFile: FileItem | null;
   selectedPaths: string[];
   setDropTargetPath: React.Dispatch<React.SetStateAction<string | null>>;
@@ -48,11 +54,23 @@ type Args = {
   setDraggedPaths: React.Dispatch<React.SetStateAction<string[]>>;
   draggedPaths: string[];
   setIsExternalDragging: React.Dispatch<React.SetStateAction<boolean>>;
-  setPendingMoveConfirm: React.Dispatch<React.SetStateAction<any>>;
+  setPendingMoveConfirm: React.Dispatch<
+    React.SetStateAction<
+      | {
+          title: string;
+          message: string;
+          run: () => Promise<void>;
+          onCancel?: () => void;
+        }
+      | null
+    >
+  >;
   setSelectedFile: React.Dispatch<React.SetStateAction<FileItem | null>>;
   setSelectedPaths: React.Dispatch<React.SetStateAction<string[]>>;
-  setSelectionBox: React.Dispatch<React.SetStateAction<any>>;
-  selectionBox: any;
+  setSelectionBox: React.Dispatch<
+    React.SetStateAction<SelectionBoxState | null>
+  >;
+  selectionBox: SelectionBoxState | null;
   setUploadConfirmDraft: React.Dispatch<
     React.SetStateAction<UploadConfirmDraft | null>
   >;
@@ -225,7 +243,7 @@ export function useExplorerDragInteractions({
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (event.button !== 0 || isDirectoryLoading) return;
       const targetElement = event.target as HTMLElement | null;
-      if ((targetElement as any)?.closest?.("[data-file-item='true']")) return;
+      if (targetElement?.closest?.("[data-file-item='true']")) return;
       closeContextMenu();
       const explorerArea = explorerAreaRef.current;
       if (!explorerArea) return;
@@ -573,7 +591,7 @@ export function useExplorerDragInteractions({
           const movedSourcePaths: string[] = [];
           for (const sourcePath of uniquePaths) {
             try {
-              await (window as any).__TAURI_INTERNALS__;
+              await (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
               // noop
               await import("@tauri-apps/api/core").then(({ invoke }) =>
                 invoke("tg_move_saved_item", { sourcePath, destinationPath }),
@@ -606,7 +624,7 @@ export function useExplorerDragInteractions({
         } catch (error) {
           toast({
             title: "Move failed",
-            description: (error as any)?.message || "Unable to move item",
+            description: (error as { message?: string })?.message || "Unable to move item",
             variant: "destructive",
           });
         } finally {
@@ -657,7 +675,7 @@ export function useExplorerDragInteractions({
       } catch (error) {
         toast({
           title: "Move failed",
-          description: (error as any)?.message || "Unable to move item",
+          description: (error as { message?: string })?.message || "Unable to move item",
           variant: "destructive",
         });
       } finally {
@@ -1043,16 +1061,16 @@ export function useExplorerDragInteractions({
       if (
         items.length &&
         items.some(
-          (item) => typeof (item as any).webkitGetAsEntry === "function",
+          (item) => typeof (item as WebkitEntryHost).webkitGetAsEntry === "function",
         )
       ) {
         const extract = async (): Promise<UploadDraftEntry[]> => {
           const entries: UploadDraftEntry[] = [];
-          const walk = async (entry: any, parentPath: string) => {
+          const walk = async (entry: FileSystemEntry, parentPath: string) => {
             if (!entry) return;
             if (entry.isFile) {
               const file: File = await new Promise((resolve, reject) =>
-                entry.file(resolve, reject),
+                (entry as FileSystemFileEntry).file(resolve, reject),
               );
               const rel = `${parentPath}${file.name}`.replace(/^\/+/, "");
               entries.push({
@@ -1064,8 +1082,8 @@ export function useExplorerDragInteractions({
               return;
             }
             if (entry.isDirectory) {
-              const reader = entry.createReader();
-              const readBatch = (): Promise<any[]> =>
+              const reader = (entry as FileSystemDirectoryEntry).createReader();
+              const readBatch = (): Promise<FileSystemEntry[]> =>
                 new Promise((resolve, reject) =>
                   reader.readEntries(resolve, reject),
                 );
@@ -1078,7 +1096,7 @@ export function useExplorerDragInteractions({
             }
           };
           for (const item of items) {
-            const entry = (item as any).webkitGetAsEntry?.();
+            const entry = (item as WebkitEntryHost).webkitGetAsEntry?.();
             if (!entry) continue;
             await walk(entry, "");
           }

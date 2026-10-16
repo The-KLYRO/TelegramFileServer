@@ -55,7 +55,7 @@ type Args = {
   uploadQueueItemsLength: number;
   setViewMode:
     | React.Dispatch<React.SetStateAction<ExplorerViewMode>>
-    | ((value: any) => void);
+    | ((value: ExplorerViewMode) => void);
 };
 
 export function useExplorerControllerUi({
@@ -354,8 +354,9 @@ export function useExplorerControllerUi({
 
   const handleViewModeChange = useCallback(
     (mode: ExplorerViewMode) => {
-      (setViewMode as any)((prev: ExplorerViewMode) =>
-        prev === mode ? prev : mode,
+      (setViewMode as React.Dispatch<React.SetStateAction<ExplorerViewMode>>)(
+        (prev: ExplorerViewMode) =>
+          prev === mode ? prev : mode,
       );
     },
     [setViewMode],
