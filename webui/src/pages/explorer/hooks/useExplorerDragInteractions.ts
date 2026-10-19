@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type FileItem } from "@/components/skybox/FileRow";
 import { removePathsFromExplorerState } from "@/pages/explorer/explorerSessionStore";
+import { invalidateDirectoryCache } from "@/pages/explorer/explorerDirectoryCache";
 import {
   type UploadConfirmDraft,
   type UploadDraftEntry,
@@ -40,7 +41,10 @@ type Args = {
   ) => Promise<void>;
   isDirectoryLoading: boolean;
   loadDirectoryRef: React.MutableRefObject<
-    (path: string, options?: { force?: boolean }) => Promise<void>
+    (
+        path: string,
+        options?: { force?: boolean; background?: boolean }
+      ) => Promise<void>
   >;
   queueCloudSync: () => void;
   requestStructureBackup: () => void;
@@ -604,7 +608,9 @@ export function useExplorerDragInteractions({
           }
           if (movedCount > 0) {
             requestStructureBackup();
-            savedPathCacheRef.current = {};
+            // Sources drop out of every cache via removePathsFromExplorerState;
+            // only the drop target gained items.
+            invalidateDirectoryCache(destinationPath);
             removePathsFromExplorerState(movedSourcePaths);
             queueCloudSync();
             showDropSuccess(destinationPath);
@@ -654,7 +660,7 @@ export function useExplorerDragInteractions({
           }
         }
         if (movedSourcePaths.length > 0) {
-          savedPathCacheRef.current = {};
+          invalidateDirectoryCache(destinationPath);
           removePathsFromExplorerState(movedSourcePaths);
         }
         toast({
@@ -689,7 +695,6 @@ export function useExplorerDragInteractions({
       loadDirectoryRef,
       queueCloudSync,
       requestStructureBackup,
-      savedPathCacheRef,
       selectedFile,
       setSelectedFile,
       showDropSuccess,

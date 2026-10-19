@@ -21,8 +21,12 @@ import {
   cacheExplorerDirectory,
   getCachedExplorerDirectory,
   getExplorerSessionState,
-  replaceExplorerDirectoryCache,
 } from "@/pages/explorer/explorerSessionStore";
+import {
+  isDirectoryCacheFresh,
+  invalidateDirectoryCache,
+  removeItemsFromCache,
+} from "@/pages/explorer/explorerDirectoryCache";
 import { useExplorerVirtualThumbnails } from "@/pages/explorer/hooks/explorerVirtualThumbnails";
 import {
   GALLERY_VIRTUAL_PATH,
@@ -47,6 +51,7 @@ import {
   isSavedVirtualFilePath,
   isSavedVirtualFolderPath,
   mergeFileItemsByIdentity,
+  normalizePath,
   parseDriveChatIdFromPath,
   savedToVirtualPath,
   savedItemToFileItem,
@@ -123,7 +128,10 @@ export function useExplorerVirtualData({
     return;
   });
   const loadDirectoryRef = useRef<
-    (path: string, options?: { force?: boolean }) => Promise<void>
+    (
+      path: string,
+      options?: { force?: boolean; background?: boolean }
+    ) => Promise<void>
   >(async () => {
     return;
   });
@@ -680,32 +688,70 @@ export function useExplorerVirtualData({
   );
 
   const loadDirectory = useCallback(
-    async (path: string, options?: { force?: boolean }) => {
+    async (
+      path: string,
+      options?: { force?: boolean; background?: boolean },
+    ) => {
       const forceReload = options?.force === true;
-      setError(null);
+      // A background pass revalidates a stale cache entry without taking over
+      // the spinner: the user is already looking at the cached listing.
+      const isBackground = options?.background === true;
+      if (!isBackground) {
+        setError(null);
+      }
 
       if (path && path !== currentPathRef.current) {
         currentPathRef.current = path;
         setCurrentPath(path);
       }
 
-      if (path.startsWith("tg://saved") && !forceReload) {
+      // Record the visit before the cache shortcut: a served-from-cache local
+      // directory is still a directory the user navigated to.
+      if (!path.startsWith("tg://") && !isBackground) {
+        void (async () => {
+          try {
+            await invoke("db_add_recent_path", { path });
+            void refreshRecentPaths();
+          } catch (error) {
+            console.error("Error adding recent path:", error);
+          }
+        })();
+      }
+
+      if (!forceReload) {
         const hasCache = applySavedPathCache(path);
         if (hasCache) {
           const cacheEntry = savedPathCacheRef.current[path];
-          if (isSavedSyncComplete && !cacheEntry.isCompleteSnapshot) {
+          if (
+            path.startsWith("tg://saved") &&
+            isSavedSyncComplete &&
+            !cacheEntry.isCompleteSnapshot
+          ) {
             void loadAllSavedItems(path).catch((error) => {
               console.error(
                 "Error upgrading cached saved items view to full list:",
                 error,
               );
             });
+          } else if (!isDirectoryCacheFresh(path)) {
+            // Serve the entry now, then refresh it silently so a revisit does
+            // not show a spinner for data that is seconds old.
+            void loadDirectoryRef
+              .current(path, { force: true, background: true })
+              .catch((error) => {
+                console.error(
+                  "Background directory revalidation failed:",
+                  error,
+                );
+              });
           }
           return;
         }
       }
 
-      setIsLoading(true);
+      if (!isBackground) {
+        setIsLoading(true);
+      }
       try {
         if (path.startsWith("tg://saved")) {
           setSavedItemsOffset(0);
@@ -724,32 +770,31 @@ export function useExplorerVirtualData({
           const convertedFiles = await hydrateFolderSettings(
             result.map(convertFileEntryToFileItem),
           );
-          setFiles(convertedFiles);
-          setCurrentPath(path);
-          setSavedItemsOffset(0);
-          setHasMoreSavedItems(false);
-          cacheSavedPath(path, convertedFiles, 0, false, true);
-        }
-
-        if (!path.startsWith("tg://")) {
-          try {
-            await invoke("db_add_recent_path", { path });
-            void refreshRecentPaths();
-          } catch (error) {
-            console.error("Error adding recent path:", error);
+          if (!isBackground || currentPathRef.current === path) {
+            setFiles(convertedFiles);
+            setCurrentPath(path);
+            setSavedItemsOffset(0);
+            setHasMoreSavedItems(false);
           }
+          cacheSavedPath(path, convertedFiles, 0, false, true);
         }
       } catch (error) {
         const typedError = error as FsError;
-        setError(typedError.message || "An unknown error occurred");
-        toast({
-          title: "Error loading directory",
-          description: typedError.message || "An unknown error occurred",
-          variant: "destructive",
-        });
+        // A background revalidation failing leaves the cached listing in place;
+        // surfacing an error for data the user is already viewing would be noise.
+        if (!isBackground) {
+          setError(typedError.message || "An unknown error occurred");
+          toast({
+            title: "Error loading directory",
+            description: typedError.message || "An unknown error occurred",
+            variant: "destructive",
+          });
+        }
         console.error("Error loading directory:", error);
       } finally {
-        setIsLoading(false);
+        if (!isBackground) {
+          setIsLoading(false);
+        }
       }
     },
     [
@@ -1148,8 +1193,23 @@ export function useExplorerVirtualData({
       setSelectedFile((prev) =>
         prev && prev.messageId && idSet.has(prev.messageId) ? null : prev,
       );
-      savedPathCacheRef.current = {};
-      replaceExplorerDirectoryCache({});
+      // A remote deletion affects that message in every folder it was listed
+      // in. Saved-file paths are tg://msg/<id>, so filter by that path across
+      // each cached listing instead of discarding them all.
+      const removedItemPaths = normalizedIds.map((id) => `tg://msg/${id}`);
+      removeItemsFromCache(removedItemPaths);
+      const removedPathSet = new Set(removedItemPaths);
+      savedPathCacheRef.current = Object.fromEntries(
+        Object.entries(savedPathCacheRef.current).map(([dirPath, entry]) => [
+          dirPath,
+          {
+            ...entry,
+            items: entry.items.filter(
+              (item) => !removedPathSet.has(item.path),
+            ),
+          },
+        ]),
+      );
     })
       .then((fn) => {
         unlisten = fn;
@@ -1164,6 +1224,91 @@ export function useExplorerVirtualData({
       }
     };
   }, [currentPathRef, isOfflineRef, setFiles, setSelectedFile]);
+
+  // The session store broadcasts removals (cut/drag moves, restores) so this
+  // hook's own mirror cannot keep serving items that no longer exist.
+  useEffect(() => {
+    const handlePathsRemoved = (event: Event) => {
+      const detail = (event as CustomEvent<{ paths?: unknown }>).detail;
+      const paths = Array.isArray(detail?.paths)
+        ? detail.paths
+            .filter((path): path is string => typeof path === "string")
+            .map((path) => normalizePath(path))
+        : [];
+      if (!paths.length) {
+        return;
+      }
+      const removedPathSet = new Set(paths);
+      savedPathCacheRef.current = Object.fromEntries(
+        Object.entries(savedPathCacheRef.current).map(([dirPath, entry]) => [
+          dirPath,
+          {
+            ...entry,
+            items: entry.items.filter(
+              (item) => !removedPathSet.has(normalizePath(item.path)),
+            ),
+          },
+        ]),
+      );
+    };
+
+    window.addEventListener(
+      "skybox-explorer-paths-removed",
+      handlePathsRemoved,
+    );
+    return () => {
+      window.removeEventListener(
+        "skybox-explorer-paths-removed",
+        handlePathsRemoved,
+      );
+    };
+  }, []);
+
+  // Server-side truth for filesystem mutations: the backend publishes
+  // fs-updated with the one directory it changed. Invalidate just that entry
+  // (and revalidate it if it is on screen) rather than trusting optimistic
+  // client-side guesses about what a 204 response produced.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+
+    listen<{ path?: unknown }>("fs-updated", (event) => {
+      const rawPath = event.payload?.path;
+      if (typeof rawPath !== "string" || !rawPath) {
+        return;
+      }
+      const changedPath = normalizePath(rawPath);
+      invalidateDirectoryCache(changedPath);
+
+      const cached = savedPathCacheRef.current[changedPath];
+      if (cached) {
+        delete savedPathCacheRef.current[changedPath];
+      }
+
+      if (
+        normalizePath(currentPathRef.current) === changedPath &&
+        !isOfflineRef.current
+      ) {
+        void loadDirectoryRef.current(changedPath, {
+          force: true,
+          background: true,
+        }).catch((error) => {
+          console.error("Reload after fs-updated failed:", error);
+        });
+      }
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((error) => {
+        console.error("Failed to listen for fs-updated:", error);
+      });
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [currentPathRef, isOfflineRef]);
 
   useEffect(() => {
     let unlisten: null | (() => void) = null;
