@@ -11,6 +11,7 @@ import {
   type TelegramError,
 } from "@/pages/explorer/shared";
 import { type UploadManager } from "@/lib/upload-manager";
+import { invalidateDirectoryCache } from "@/pages/explorer/explorerDirectoryCache";
 
 type Args = {
   activeDownload: {
@@ -23,7 +24,10 @@ type Args = {
   hasTransferEntries: boolean;
   isUploadingFiles: boolean;
   loadDirectoryRef: React.MutableRefObject<
-    (path: string, options?: { force?: boolean }) => Promise<void>
+    (
+        path: string,
+        options?: { force?: boolean; background?: boolean }
+      ) => Promise<void>
   >;
   queueCloudSync: () => void;
   requestStructureBackup: () => void;
@@ -115,7 +119,8 @@ export function useExplorerControllerTransfers({
         });
         if (result.createdFolderStructure) {
           requestStructureBackup();
-          savedPathCacheRef.current = {};
+          // Uploads land in the current folder; only that listing changed.
+          invalidateDirectoryCache(uploadTargetPath);
           queueCloudSync();
           if (currentPathRef.current === uploadTargetPath) {
             await loadDirectoryRef.current(uploadTargetPath, { force: true });
@@ -137,7 +142,6 @@ export function useExplorerControllerTransfers({
       queueCloudSync,
       requestStructureBackup,
       resetUploadSpeedTracking,
-      savedPathCacheRef,
       uploadManagerRef,
     ],
   );
