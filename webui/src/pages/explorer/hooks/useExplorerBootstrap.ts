@@ -31,7 +31,10 @@ type UseExplorerBootstrapArgs = {
   setShowFavorites: (value: boolean) => void;
   setViewMode: (value: ExplorerViewMode) => void;
   loadDirectoryRef: MutableRefObject<
-    (path: string, options?: { force?: boolean }) => Promise<void>
+    (
+        path: string,
+        options?: { force?: boolean; background?: boolean }
+      ) => Promise<void>
   >;
   refreshRecentPaths: () => Promise<void>;
   loadFavorites: () => Promise<void>;

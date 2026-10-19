@@ -5,6 +5,12 @@ import { toast } from "@/hooks/use-toast";
 import { type FileItem } from "@/components/skybox/FileRow";
 import { removePathsFromExplorerState } from "@/pages/explorer/explorerSessionStore";
 import {
+  addItemsToCache,
+  invalidateDirectoryCache,
+  removeItemsFromCache,
+  renameItemInCache,
+} from "@/pages/explorer/explorerDirectoryCache";
+import {
   type UploadConfirmDraft,
   type UploadDraftEntry,
 } from "@/components/skybox/UploadConfirmWidget";
@@ -36,6 +42,7 @@ import {
   joinPath,
   mergeFileItemsByIdentity,
   normalizePath,
+  savedToVirtualPath,
   telegramMessageToFileItem,
   virtualToSavedPath,
 } from "@/pages/explorer/shared";
@@ -59,9 +66,15 @@ type UseExplorerFileActionsArgs = {
   isLocalAudioFile: (file: FileItem) => boolean;
   isLocalImageFile: (file: FileItem) => boolean;
   isLocalVideoFile: (file: FileItem) => boolean;
-  loadDirectory: (path: string, options?: { force?: boolean }) => Promise<void>;
+  loadDirectory: (
+        path: string,
+        options?: { force?: boolean; background?: boolean }
+      ) => Promise<void>;
   loadDirectoryRef: React.MutableRefObject<
-    (path: string, options?: { force?: boolean }) => Promise<void>
+    (
+        path: string,
+        options?: { force?: boolean; background?: boolean }
+      ) => Promise<void>
   >;
   navigate: (path: string) => void;
   newFolderName: string;
@@ -466,9 +479,13 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
         }
         if (targets.some((target) => isSavedVirtualItemPath(target.path))) {
           requestStructureBackup();
-          savedPathCacheRef.current = {};
           queueCloudSync();
         }
+        // Drop only the deleted items from every cached listing. Saved-file
+        // paths carry no folder component, so they must be filtered by path
+        // across all entries rather than cleared wholesale; clearing cost a
+        // full refetch of every other folder on the next visit.
+        removeItemsFromCache(targets.map((target) => target.path));
         await loadDirectoryRef.current(activePath, { force: true });
         toast({
           title:
@@ -510,7 +527,6 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
       loadDirectoryRef,
       queueCloudSync,
       requestStructureBackup,
-      savedPathCacheRef,
       selectedFile,
       setDeleteTargets,
       setSelectedFile,
@@ -533,7 +549,7 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
           description: `${file.name} deleted permanently from Telegram`,
         });
         removeItemFromCurrentView(file.path);
-        savedPathCacheRef.current = {};
+        removeItemsFromCache([file.path]);
       } catch (error) {
         const typedError = error as TelegramError;
         toast({
@@ -549,7 +565,6 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
       queueCloudSync,
       removeItemFromCurrentView,
       requestStructureBackup,
-      savedPathCacheRef,
       selectedFile,
     ],
   );
@@ -567,7 +582,10 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
         await invoke("tg_restore_saved_item", { sourcePath: file.path });
         requestStructureBackup();
         queueCloudSync();
-        savedPathCacheRef.current = {};
+        // The item leaves the bin and reappears in an original folder we do
+        // not know client-side, so drop it everywhere and let that folder
+        // refetch lazily on visit.
+        removeItemsFromCache([file.path]);
         toast({
           title: "Restored",
           description: `${file.name} restored to its previous folder`,
@@ -592,7 +610,6 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
       loadDirectory,
       queueCloudSync,
       requestStructureBackup,
-      savedPathCacheRef,
       selectedFile,
       setSelectedFile,
     ],
@@ -629,7 +646,7 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
     if (restoredCount > 0) {
       requestStructureBackup();
       queueCloudSync();
-      savedPathCacheRef.current = {};
+      removeItemsFromCache(recycleBinItems.map((item) => item.path));
       setSelectedFile(null);
       setSelectedPaths([]);
       closeDetailsPanel();
@@ -662,7 +679,6 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
     loadDirectory,
     queueCloudSync,
     requestStructureBackup,
-    savedPathCacheRef,
     setSelectedFile,
     setSelectedPaths,
   ]);
@@ -721,11 +737,24 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
           folderName,
         });
         requestStructureBackup();
-        savedPathCacheRef.current = {};
         queueCloudSync();
+        // Write the new folder straight into the listing the user is viewing
+        // instead of invalidating every cached directory.
+        addItemsToCache(targetPath, [
+          {
+            name: folderName,
+            path: savedToVirtualPath(
+              joinPath(virtualToSavedPath(targetPath), folderName),
+            ),
+            isDirectory: true,
+          },
+        ]);
       } else {
         const newPath = `${targetPath}/${folderName}`.replace("//", "/");
         await invoke("fs_create_dir", { path: newPath });
+        addItemsToCache(targetPath, [
+          { name: folderName, path: newPath, isDirectory: true },
+        ]);
       }
       toast({
         title: "Folder created",
@@ -756,7 +785,6 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
     currentPathRef,
     queueCloudSync,
     requestStructureBackup,
-    savedPathCacheRef,
     setIsNewFolderDialogOpen,
     setNewFolderName,
   ]);
@@ -788,7 +816,6 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
             newName: normalizedName,
           });
           requestStructureBackup();
-          savedPathCacheRef.current = {};
           queueCloudSync();
         } else {
           const directory = getParentPath(file.path);
@@ -805,6 +832,15 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
             newPath: joinPath(directory, normalizedName),
           });
         }
+        // Write the rename through the cache instead of clearing it: a rename
+        // only affects the item's own listing and, for folders, its subtree.
+        renameItemInCache(file.path, {
+          ...file,
+          name: normalizedName,
+          path: file.isDirectory
+            ? joinPath(getParentPath(file.path), normalizedName)
+            : file.path,
+        });
         setRenameTarget(null);
         setRenameValue("");
         toast({
@@ -828,7 +864,6 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
       loadDirectoryRef,
       queueCloudSync,
       requestStructureBackup,
-      savedPathCacheRef,
       selectedFile,
       setRenameTarget,
       setRenameValue,
@@ -1097,7 +1132,11 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
             }
             if (copiedCount > 0) {
               requestStructureBackup();
-              savedPathCacheRef.current = {};
+              // Copies share the source message_id, so a copied item's
+              // tg://msg path collides with the original and cannot be built
+              // into a distinct cache entry. Invalidate the destination only;
+              // every other folder keeps its cache.
+              invalidateDirectoryCache(destinationFolderPath);
               queueCloudSync();
             }
             await loadDirectoryRef.current(activePath, { force: true });
@@ -1130,7 +1169,10 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
           }
           if (movedCount > 0) {
             requestStructureBackup();
-            savedPathCacheRef.current = {};
+            // Sources are dropped by removePathsFromExplorerState below; the
+            // destination gains items with unknown message ids, so only its
+            // own listing needs a refetch.
+            invalidateDirectoryCache(destinationFolderPath);
             removePathsFromExplorerState(movedSourcePaths);
             queueCloudSync();
           }
@@ -1187,8 +1229,13 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
           }
         }
         if (movedSourcePaths.length > 0) {
-          savedPathCacheRef.current = {};
           removePathsFromExplorerState(movedSourcePaths);
+        }
+        if (
+          copiedCount > 0 ||
+          (clipboardSnapshot.mode === "cut" && movedCount > 0)
+        ) {
+          invalidateDirectoryCache(destinationFolderPath);
         }
         if (clipboardSnapshot.mode === "cut" && movedCount > 0)
           setClipboardItem(null);
@@ -1220,7 +1267,6 @@ export function useExplorerFileActions(args: UseExplorerFileActionsArgs) {
       loadDirectoryRef,
       queueCloudSync,
       requestStructureBackup,
-      savedPathCacheRef,
       setActivePaste,
       setClipboardItem,
     ],

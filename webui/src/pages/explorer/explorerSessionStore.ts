@@ -1,5 +1,12 @@
 import type { FileItem } from "@/components/skybox/FileRow";
 import {
+  getDirectoryCache,
+  getAllDirectoryCache,
+  removeItemsFromCache,
+  replaceDirectoryCache,
+  setDirectoryCache,
+} from "@/pages/explorer/explorerDirectoryCache";
+import {
   DEFAULT_EXPLORER_HOME_PATH,
   createExplorerTabId,
   getExplorerTabTitle,
@@ -65,7 +72,7 @@ const createInitialState = (): ExplorerSessionState => ({
   showFavorites: true,
   scrollPositions: {},
   pendingScrollRestorePath: null,
-  directoryCache: {},
+  directoryCache: getAllDirectoryCache(),
   tabs: [
     {
       id: INITIAL_TAB_ID,
@@ -146,6 +153,9 @@ export const cacheExplorerDirectory = (
     return;
   }
 
+  // The persisted cache is the single source of truth; the in-memory session
+  // mirror below exists only so a freshly-mounted hook can seed its ref.
+  setDirectoryCache(path, snapshot);
   updateExplorerSessionState((state) => ({
     directoryCache: {
       ...state.directoryCache,
@@ -161,13 +171,14 @@ export const getCachedExplorerDirectory = (
     return null;
   }
 
-  return explorerSessionState.directoryCache[path] ?? null;
+  return getDirectoryCache(path);
 };
 
 export const replaceExplorerDirectoryCache = (
   nextCache: Record<string, SavedPathCacheEntry>,
 ): void => {
-  updateExplorerSessionState({ directoryCache: nextCache });
+  replaceDirectoryCache(nextCache);
+  updateExplorerSessionState({ directoryCache: { ...nextCache } });
 };
 
 export const removePathsFromExplorerState = (paths: string[]): void => {
@@ -188,16 +199,12 @@ export const removePathsFromExplorerState = (paths: string[]): void => {
   const filterSelectedPaths = (selectedPaths: string[]): string[] =>
     selectedPaths.filter((path) => !removedSet.has(normalizePath(path)));
 
+  // Reach every cached listing, not just this session's mirror — the old
+  // implementation only filtered `directoryCache`, leaving the hook-level ref
+  // (and the persisted copy, once added) still holding the removed items.
+  removeItemsFromCache(normalizedPaths);
+
   updateExplorerSessionState((state) => {
-    const nextDirectoryCache = Object.fromEntries(
-      Object.entries(state.directoryCache).map(([path, snapshot]) => [
-        path,
-        {
-          ...snapshot,
-          items: filterItems(snapshot.items),
-        },
-      ]),
-    );
     const nextTabSnapshots = Object.fromEntries(
       Object.entries(state.tabSnapshots).map(([tabId, snapshot]) => [
         tabId,
@@ -222,7 +229,7 @@ export const removePathsFromExplorerState = (paths: string[]): void => {
         removedSet.has(normalizePath(state.selectedFile.path))
           ? null
           : state.selectedFile,
-      directoryCache: nextDirectoryCache,
+      directoryCache: { ...getAllDirectoryCache() },
       tabSnapshots: nextTabSnapshots,
     };
   });

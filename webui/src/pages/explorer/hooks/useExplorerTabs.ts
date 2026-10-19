@@ -37,7 +37,10 @@ interface UseExplorerTabsParams {
   }>;
   explorerAreaRef: RefObject<HTMLDivElement | null>;
   loadDirectoryRef: MutableRefObject<
-    (path: string, options?: { force?: boolean }) => Promise<void>
+    (
+        path: string,
+        options?: { force?: boolean; background?: boolean }
+      ) => Promise<void>
   >;
   closeDetailsPanel: () => void;
   setContextMenuState: Dispatch<
