@@ -110,7 +110,7 @@ function messageIdFromPath(path: string): number {
 
 /** Streaming/preview URL for `/api/fs/media`, token in the query for `<video>`/`<img>`. */
 function mediaUrl(messageId: number, inline: boolean): string {
-  const base = `/api/fs/media?message_id=${messageId}&inline=${inline ? "1" : "0"}`;
+  const base = `/api/fs/media?message_id=${messageId}&inline=${inline}`;
   const token = authToken();
   return token ? `${base}&token=${encodeURIComponent(token)}` : base;
 }

@@ -2827,7 +2827,29 @@ async fn media_by_message(
 struct MediaByMessageQuery {
     message_id: i32,
     token: Option<String>,
+    /// `1`/`0` are as valid in a query string as `true`/`false`, and the
+    /// webui has always sent the short form — so accept both rather than
+    /// 400 a URL that reaches the handler fine otherwise.
+    #[serde(default, deserialize_with = "flexible_bool")]
     inline: Option<bool>,
+}
+
+/// Query strings have no bool literal, so `serde`'s `bool` only ever sees a
+/// string. Accept `1`/`0` alongside `true`/`false` instead of rejecting with
+/// axum's "provided string was not `true` or `false`".
+fn flexible_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" => Ok(Some(true)),
+        "0" | "false" => Ok(Some(false)),
+        "" => Ok(None),
+        other => Err(serde::de::Error::custom(format!(
+            "expected `true`, `false`, `1` or `0`, got `{other}`"
+        ))),
+    }
 }
 
 // ===== Profile photo + history indexing =====
@@ -2924,6 +2946,10 @@ struct IndexStartResponse {
     latest_message_id: i32,
     /// Set when the chat could not be indexed (e.g. the bot lacks read access).
     notice: Option<String>,
+    /// `true` when this call attached to an already-running index instead of
+    /// starting one. That is a normal outcome (a page refresh during a backfill),
+    /// not a failure, so the UI must not render it as an error.
+    already_running: bool,
 }
 
 /// Release the indexer's `running` claim. Called on every synchronous error
@@ -2981,6 +3007,15 @@ async fn fs_index(
         let mut state_guard = state.indexer.lock().await;
         if state_guard.running {
             let indexed = state_guard.indexed;
+            drop(state_guard);
+            // A refresh while a backfill is in flight re-POSTs this endpoint.
+            // That is an expected join, so publish a snapshot for the freshly
+            // opened toolbar instead of staying silent — without it the bar
+            // only moves once the background task emits its next page.
+            state.publish_event(
+                "account_sync_changed",
+                serde_json::json!({ "state": "Syncing", "indexed_count": indexed }),
+            );
             return Ok(Json(IndexStartResponse {
                 total_new_messages: 0,
                 started_from_empty_db: started_from_empty,
@@ -2988,7 +3023,8 @@ async fn fs_index(
                 historical_sync_complete: false,
                 indexed_count: indexed,
                 latest_message_id: 0,
-                notice: Some("an index run is already in progress".to_string()),
+                notice: None,
+                already_running: true,
             }));
         }
         state_guard.running = true;
@@ -3051,6 +3087,7 @@ async fn fs_index(
             indexed_count: 0,
             latest_message_id: 0,
             notice: Some(notice),
+            already_running: false,
         }));
     }
 
@@ -3099,6 +3136,7 @@ async fn fs_index(
         indexed_count: 0,
         latest_message_id: latest_id,
         notice: None,
+        already_running: false,
     }))
 }
 
@@ -3916,6 +3954,43 @@ mod tests {
         };
     }
 
+    /// The webUI decides "join vs failure" purely from the JSON body, so the
+    /// `already_running` flag has to survive serialization and must never be
+    /// paired with a notice. A regression here re-introduces the
+    /// "index already in progress" error toast on every page refresh.
+    #[test]
+    fn index_start_response_serializes_join_as_not_a_failure() {
+        let joined = IndexStartResponse {
+            total_new_messages: 0,
+            started_from_empty_db: false,
+            saved_messages_chat_id: -100,
+            historical_sync_complete: false,
+            indexed_count: 42,
+            latest_message_id: 0,
+            notice: None,
+            already_running: true,
+        };
+        let value = serde_json::to_value(&joined).unwrap();
+        assert_eq!(value["already_running"], true);
+        assert!(value["notice"].is_null());
+        assert_eq!(value["indexed_count"], 42);
+
+        // A genuine failure keeps its notice and never claims to be a join.
+        let failed = IndexStartResponse {
+            total_new_messages: 0,
+            started_from_empty_db: false,
+            saved_messages_chat_id: -100,
+            historical_sync_complete: false,
+            indexed_count: 0,
+            latest_message_id: 0,
+            notice: Some("no readable messages".to_string()),
+            already_running: false,
+        };
+        let value = serde_json::to_value(&failed).unwrap();
+        assert_eq!(value["already_running"], false);
+        assert_eq!(value["notice"], "no readable messages");
+    }
+
     /// With no saved config there is nothing to dial, and saying so beats
     /// guessing localhost. (A non-empty state URI still wins — that path
     /// exists only for tests and CI.)
@@ -4104,6 +4179,51 @@ mod tests {
                 "{uri} should tell the client how to authenticate"
             );
         }
+    }
+
+    /// `?inline=1` must reach the handler. serde's `bool` only parses
+    /// `true`/`false`, so the short form the webui sends used to 400 in the
+    /// extractor before auth ran — the client saw "provided string was not
+    /// `true` or `false`" instead of a preview.
+    #[tokio::test]
+    async fn media_by_message_accepts_query_string_bool_spelling() {
+        use tower::ServiceExt;
+
+        let app = router("mongodb://127.0.0.1:1".to_string());
+
+        // Auth runs before any Mongo call, so 401 means the query string
+        // deserialized. A rejected query would answer 400 instead.
+        for uri in [
+            "/api/fs/media?message_id=17&inline=1&token=abc",
+            "/api/fs/media?message_id=17&inline=0&token=abc",
+            "/api/fs/media?message_id=17&inline=true&token=abc",
+            "/api/fs/media?message_id=17&inline=false&token=abc",
+            "/api/fs/media?message_id=17&token=abc",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri(uri)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{uri}");
+        }
+
+        // Anything else is still a client error, not a silent default.
+        let bogus = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/fs/media?message_id=17&inline=maybe&token=abc")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bogus.status(), StatusCode::BAD_REQUEST);
     }
 
     /// Routing only: unknown paths fall through to the 404 handler and
