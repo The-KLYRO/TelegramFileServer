@@ -293,10 +293,13 @@ export function useExplorerVirtualData({
           "tg_index_saved_messages",
         );
 
-        // The backend now reports the newest readable message id and an
-        // optional notice (e.g. unreadable chat). Surface both so indexing
-        // never fails silently with a blank "0 / false".
-        if (result.notice) {
+        // Joining an in-flight run is expected on refresh, so it must be
+        // checked before `notice`: it deliberately carries no notice *and* no
+        // latest_message_id, which would otherwise trip the "No messages
+        // found" branch below.
+        if (result.already_running) {
+          // Handled by the `account_sync_changed` snapshot the join publishes.
+        } else if (result.notice) {
           toast({
             title: "Indexing issue",
             description: result.notice,
@@ -841,8 +844,17 @@ export function useExplorerVirtualData({
       const hasExplicitPercent =
         typeof progress === "number" && Number.isFinite(progress);
       if (hasExplicitPercent) {
-        setSavedSyncProgress(progress);
-        lastSavedSyncProgressAtRef.current = Date.now();
+        // Backfill progress only moves forward. Early pages legitimately
+        // compute 0% against a large chat; applying that literally would snap
+        // the bar back to zero and, by stamping the timestamp, stall the
+        // indeterminate creep above.
+        setSavedSyncProgress((prev) => {
+          const next = Math.max(prev, progress);
+          if (next !== prev) {
+            lastSavedSyncProgressAtRef.current = Date.now();
+          }
+          return next;
+        });
       } else if (state === "UpToDate") {
         setSavedSyncProgress(100);
         lastSavedSyncProgressAtRef.current = Date.now();

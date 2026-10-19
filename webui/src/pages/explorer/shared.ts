@@ -145,6 +145,11 @@ export interface TelegramIndexSavedMessagesResult {
   latest_message_id?: number;
   /** Human-readable reason indexing could not proceed, if any. */
   notice?: string | null;
+  /**
+   * The request attached to an index run that was already in flight (e.g. a
+   * page refresh mid-backfill). Normal — never render this as an error.
+   */
+  already_running?: boolean;
 }
 
 export type SyncStateDto =

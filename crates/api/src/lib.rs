@@ -2924,6 +2924,10 @@ struct IndexStartResponse {
     latest_message_id: i32,
     /// Set when the chat could not be indexed (e.g. the bot lacks read access).
     notice: Option<String>,
+    /// `true` when this call attached to an already-running index instead of
+    /// starting one. That is a normal outcome (a page refresh during a backfill),
+    /// not a failure, so the UI must not render it as an error.
+    already_running: bool,
 }
 
 /// Release the indexer's `running` claim. Called on every synchronous error
@@ -2981,6 +2985,15 @@ async fn fs_index(
         let mut state_guard = state.indexer.lock().await;
         if state_guard.running {
             let indexed = state_guard.indexed;
+            drop(state_guard);
+            // A refresh while a backfill is in flight re-POSTs this endpoint.
+            // That is an expected join, so publish a snapshot for the freshly
+            // opened toolbar instead of staying silent — without it the bar
+            // only moves once the background task emits its next page.
+            state.publish_event(
+                "account_sync_changed",
+                serde_json::json!({ "state": "Syncing", "indexed_count": indexed }),
+            );
             return Ok(Json(IndexStartResponse {
                 total_new_messages: 0,
                 started_from_empty_db: started_from_empty,
@@ -2988,7 +3001,8 @@ async fn fs_index(
                 historical_sync_complete: false,
                 indexed_count: indexed,
                 latest_message_id: 0,
-                notice: Some("an index run is already in progress".to_string()),
+                notice: None,
+                already_running: true,
             }));
         }
         state_guard.running = true;
@@ -3051,6 +3065,7 @@ async fn fs_index(
             indexed_count: 0,
             latest_message_id: 0,
             notice: Some(notice),
+            already_running: false,
         }));
     }
 
@@ -3099,6 +3114,7 @@ async fn fs_index(
         indexed_count: 0,
         latest_message_id: latest_id,
         notice: None,
+        already_running: false,
     }))
 }
 
@@ -3914,6 +3930,43 @@ mod tests {
             env::remove_var("TFS_DATA_DIR");
             env::remove_var("TFS_BIN_DIR");
         };
+    }
+
+    /// The webUI decides "join vs failure" purely from the JSON body, so the
+    /// `already_running` flag has to survive serialization and must never be
+    /// paired with a notice. A regression here re-introduces the
+    /// "index already in progress" error toast on every page refresh.
+    #[test]
+    fn index_start_response_serializes_join_as_not_a_failure() {
+        let joined = IndexStartResponse {
+            total_new_messages: 0,
+            started_from_empty_db: false,
+            saved_messages_chat_id: -100,
+            historical_sync_complete: false,
+            indexed_count: 42,
+            latest_message_id: 0,
+            notice: None,
+            already_running: true,
+        };
+        let value = serde_json::to_value(&joined).unwrap();
+        assert_eq!(value["already_running"], true);
+        assert!(value["notice"].is_null());
+        assert_eq!(value["indexed_count"], 42);
+
+        // A genuine failure keeps its notice and never claims to be a join.
+        let failed = IndexStartResponse {
+            total_new_messages: 0,
+            started_from_empty_db: false,
+            saved_messages_chat_id: -100,
+            historical_sync_complete: false,
+            indexed_count: 0,
+            latest_message_id: 0,
+            notice: Some("no readable messages".to_string()),
+            already_running: false,
+        };
+        let value = serde_json::to_value(&failed).unwrap();
+        assert_eq!(value["already_running"], false);
+        assert_eq!(value["notice"], "no readable messages");
     }
 
     /// With no saved config there is nothing to dial, and saying so beats

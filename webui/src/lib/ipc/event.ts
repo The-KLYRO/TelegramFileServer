@@ -1,7 +1,26 @@
 export type UnlistenFn = () => void;
 
 let eventSource: EventSource | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempts = 0;
 const handlerMap = new Map<string, Set<(e: { payload: unknown }) => void>>();
+
+function scheduleReconnect(): void {
+  // A single transient error must not kill live progress for the rest of the
+  // page session — without this, index-sync bars freeze at their last value.
+  if (reconnectTimer) return;
+  const attempt = Math.min(reconnectAttempts + 1, 6);
+  reconnectAttempts = attempt;
+  const delay = 1000 * Math.pow(2, attempt - 1);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    // Only rebuild when the stream is actually dead. While CONNECTING the
+    // browser is already retrying on its own.
+    if (eventSource && eventSource.readyState !== EventSource.CLOSED) return;
+    eventSource = null;
+    getEventSource();
+  }, delay);
+}
 
 function getEventSource(): EventSource | null {
   if (eventSource) return eventSource;
@@ -12,10 +31,13 @@ function getEventSource(): EventSource | null {
       ? `/api/events?token=${encodeURIComponent(token)}`
       : "/api/events";
     const es = new EventSource(url);
+    es.onopen = () => {
+      reconnectAttempts = 0;
+    };
     es.onerror = () => {
-      // Suppress browser console errors for failed SSE connection
-      es.close();
-      eventSource = null;
+      // EventSource retries by itself while CONNECTING; only act once the
+      // browser has given up (CLOSED), which happens after repeated failures.
+      if (es.readyState === EventSource.CLOSED) scheduleReconnect();
     };
     es.onmessage = (event) => {
       try {
