@@ -2827,7 +2827,29 @@ async fn media_by_message(
 struct MediaByMessageQuery {
     message_id: i32,
     token: Option<String>,
+    /// `1`/`0` are as valid in a query string as `true`/`false`, and the
+    /// webui has always sent the short form — so accept both rather than
+    /// 400 a URL that reaches the handler fine otherwise.
+    #[serde(default, deserialize_with = "flexible_bool")]
     inline: Option<bool>,
+}
+
+/// Query strings have no bool literal, so `serde`'s `bool` only ever sees a
+/// string. Accept `1`/`0` alongside `true`/`false` instead of rejecting with
+/// axum's "provided string was not `true` or `false`".
+fn flexible_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" => Ok(Some(true)),
+        "0" | "false" => Ok(Some(false)),
+        "" => Ok(None),
+        other => Err(serde::de::Error::custom(format!(
+            "expected `true`, `false`, `1` or `0`, got `{other}`"
+        ))),
+    }
 }
 
 // ===== Profile photo + history indexing =====
@@ -4157,6 +4179,51 @@ mod tests {
                 "{uri} should tell the client how to authenticate"
             );
         }
+    }
+
+    /// `?inline=1` must reach the handler. serde's `bool` only parses
+    /// `true`/`false`, so the short form the webui sends used to 400 in the
+    /// extractor before auth ran — the client saw "provided string was not
+    /// `true` or `false`" instead of a preview.
+    #[tokio::test]
+    async fn media_by_message_accepts_query_string_bool_spelling() {
+        use tower::ServiceExt;
+
+        let app = router("mongodb://127.0.0.1:1".to_string());
+
+        // Auth runs before any Mongo call, so 401 means the query string
+        // deserialized. A rejected query would answer 400 instead.
+        for uri in [
+            "/api/fs/media?message_id=17&inline=1&token=abc",
+            "/api/fs/media?message_id=17&inline=0&token=abc",
+            "/api/fs/media?message_id=17&inline=true&token=abc",
+            "/api/fs/media?message_id=17&inline=false&token=abc",
+            "/api/fs/media?message_id=17&token=abc",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri(uri)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{uri}");
+        }
+
+        // Anything else is still a client error, not a silent default.
+        let bogus = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/fs/media?message_id=17&inline=maybe&token=abc")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bogus.status(), StatusCode::BAD_REQUEST);
     }
 
     /// Routing only: unknown paths fall through to the 404 handler and
