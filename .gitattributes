@@ -1,0 +1,2 @@
+# Git hooks must keep LF endings; CRLF breaks the #!/bin/sh shebang on checkout.
+.githooks/* text eol=lf

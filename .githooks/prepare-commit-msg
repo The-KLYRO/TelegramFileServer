@@ -1,0 +1,18 @@
+#!/bin/sh
+# Append The-KLYRO as co-author on every commit.
+# Fires before the message is finalized (editor, -m, amend, merge, squash).
+# git's default cleanup strips '#' comment lines and normalizes blank lines,
+# so a simple append lands the trailer in its own trailer paragraph.
+
+msg_file="$1"
+coauthor="Co-authored-by: The-KLYRO <105803100+The-KLYRO@users.noreply.github.com>"
+
+# Already credited (amend / recommit / cherry-pick) -> do not duplicate.
+grep -qF "$coauthor" "$msg_file" 2>/dev/null && exit 0
+
+# Blank line + trailer. Guard against an empty/missing message file.
+if [ -f "$msg_file" ]; then
+  printf '\n%s\n' "$coauthor" >> "$msg_file"
+fi
+
+exit 0

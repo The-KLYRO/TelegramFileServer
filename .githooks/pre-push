@@ -1,0 +1,35 @@
+#!/bin/sh
+# Mirror pushed branches to the other remotes (best-effort, never blocks).
+# $1 = remote name being pushed to, $2 = remote url. Stdin: ref lines.
+#
+# Recursion guard: we set TFS_SYNC_GUARD=1 on our own child pushes so this
+# hook no-ops for them (one level of mirroring only).
+[ -n "$TFS_SYNC_GUARD" ] && exit 0
+
+remote="$1"
+[ -z "$remote" ] && exit 0
+
+# Collect the local->remote branch mappings being pushed.
+# stdin lines: <local_ref> <local_sha> <remote_ref> <remote_sha>
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in
+    refs/heads/*) ;;
+    *) continue ;;
+  esac
+  branch="${remote_ref#refs/heads/}"
+  # Skip deletes (remote_sha all-zeros means the branch is being deleted).
+  case "$remote_sha" in
+    0000000000000000000000000000000000000000) continue ;;
+  esac
+
+  for other in origin backup gitlab; do
+    [ "$other" = "$remote" ] && continue
+    git remote get-url "$other" >/dev/null 2>&1 || continue
+    # Non-fast-forward (e.g. divergent squash on the base branch) just warns.
+    if ! TFS_SYNC_GUARD=1 git push "$other" "$local_sha:refs/heads/$branch" >/dev/null 2>&1; then
+      echo "sync: warn: could not mirror $branch to $other" >&2
+    fi
+  done
+done
+
+exit 0
